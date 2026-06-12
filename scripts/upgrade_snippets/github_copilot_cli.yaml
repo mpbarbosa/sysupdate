@@ -1,0 +1,50 @@
+# GitHub Copilot CLI Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-11-24
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-11-24) - Initial alpha version with externalized configuration
+#                            - Added application identifiers, messages, and dependencies
+#                            - Not ready for production use
+
+# Application identifiers
+application:
+  name: "copilot"
+  display_name: "GitHub Copilot CLI"
+  npm_package: "@github/copilot"
+
+# Dependencies
+dependencies:
+  - name: "npm"
+    command: "npm"
+    help: "Install npm first to use GitHub Copilot CLI"
+  - name: "Node.js"
+    version: "v22+"
+    required: true
+  - name: "npm"
+    version: "v10+"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking GitHub Copilot CLI updates..."
+  install_help: |
+    Install: npm install -g @github/copilot
+    Requirements: Node.js v22+, npm v10+, active Copilot subscription
+  failed_version: "Failed to get current version"
+  update_success: "GitHub Copilot CLI updated"
+
+# Version extraction
+version:
+  command: "copilot --version"
+  regex: '.*([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "npm"
+
+# Update commands
+update:
+  command: "npm install -g --force @github/copilot@latest"
+  output_lines: 10

@@ -1,0 +1,80 @@
+# Postman Update Configuration
+# 
+# Version: 0.2.0-alpha
+# Date: 2025-11-29
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.2.0-alpha (2025-11-29) - Updated to support both snap and tarball installations
+#   0.1.0-alpha (2025-11-29) - Initial alpha version with externalized configuration
+#
+# Reference: https://learning.postman.com/docs/getting-started/installation/installation-and-updates/
+
+# Application identifiers
+application:
+  name: "postman"
+  command: "postman"
+  display_name: "Postman API Platform"
+
+# Messages
+messages:
+  checking_updates: "Checking Postman updates..."
+  install_help: |
+    Install Postman:
+    
+    Via Tarball (recommended for compatibility):
+      wget https://dl.pstmn.io/download/latest/linux64 -O postman.tar.gz
+      tar -xzf postman.tar.gz
+      sudo mv Postman /opt/
+      sudo ln -s /opt/Postman/Postman /usr/bin/postman
+    
+    Via Snap (may have compatibility issues):
+      sudo snap install postman
+    
+    Reference: https://learning.postman.com/docs/getting-started/installation/installation-and-updates/
+  failed_version: "Failed to get current Postman version"
+  update_success: "Postman update completed successfully"
+  downloading: "Downloading latest Postman tarball..."
+  extracting: "Extracting Postman..."
+  installing: "Installing to /opt/Postman..."
+  backing_up: "Backing up existing installation..."
+  creating_symlink: "Creating symbolic link..."
+  creating_desktop: "Creating desktop entry..."
+  updating_snap: "Updating Postman via snap..."
+  snap_incompatible: |
+    
+    ⚠️  WARNING: Snap version incompatible with your system
+    
+    The snap version of Postman requires libraries that conflict with your system.
+    This is a known issue with snap packaging.
+    
+    Recommended solution:
+      1. Remove snap version: sudo snap remove postman
+      2. Install via tarball (use installation help above)
+    
+    The tarball version provides better compatibility and doesn't require snap.
+
+# Version extraction
+version:
+  command: "snap info postman"
+  regex: 'installed:[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "github"
+  github_owner: "postmanlabs"
+  github_repo: "postman-app-support"
+
+# Update configuration
+update:
+  method: "auto_detect"
+  snap_command: "sudo snap refresh postman"
+  download_url: "https://dl.pstmn.io/download/latest/linux64"
+  install_dir: "/opt/Postman"
+  symlink_path: "/usr/bin/postman"
+  requires_sudo: true
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Update Postman?"
+    type: "yes_no"

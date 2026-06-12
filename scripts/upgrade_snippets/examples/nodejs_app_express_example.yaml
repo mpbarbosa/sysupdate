@@ -1,0 +1,91 @@
+# Example: Express.js API Application Update Configuration
+# 
+# This is a real-world example for updating an Express.js API server
+# Copy this file and customize for your specific application
+#
+# Version: 1.0.0
+# Date: 2025-11-26
+
+# Application identifiers
+application:
+  name: "express-api"
+  display_name: "Express.js API Server"
+  directory: "/opt/express-api"
+  npm_package: "express-api"
+
+# Dependencies
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: true
+  - name: "npm"
+    command: "npm"
+    help: "Install npm: sudo apt install npm"
+    required: true
+  - name: "Node.js"
+    command: "node"
+    help: "Install Node.js v20+: https://nodejs.org/"
+    version: "v20+"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking for Express API updates..."
+  install_help: |
+    Initial setup:
+    git clone https://github.com/yourorg/express-api /opt/express-api
+    cd /opt/express-api
+    npm ci --production
+    sudo systemctl start express-api
+  failed_version: "Failed to get current API version"
+  failed_get_version: "Cannot determine current version from package.json"
+  update_success: "Express API updated and restarted successfully"
+  update_failed: "Failed to update Express API"
+
+# Version extraction from package.json
+version:
+  command: "node -p \"require('./package.json').version\""
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+)$'
+  source: "github"
+  github_owner: "yourorg"
+  github_repo: "express-api"
+
+# Update commands - typical Express.js workflow
+update:
+  git_pull_command: "git pull origin production"
+  npm_install_command: "npm ci --production --quiet"
+  build_command: null  # No build step for plain Express apps
+  restart_command: "sudo systemctl restart express-api"
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Update Express API to latest version?"
+    type: "yes_no"
+    default: "y"
+  restart_service:
+    message: "Restart Express API service now?"
+    type: "yes_no"
+    default: "y"
+
+# Build instructions for initial deployment
+build_instructions:
+  dependencies:
+    - git
+    - nodejs
+    - npm
+    - systemd
+  steps:
+    - action: "Clone repository"
+      command: "git clone https://github.com/yourorg/express-api /opt/express-api"
+    - action: "Install dependencies"
+      command: "cd /opt/express-api && npm ci --production"
+    - action: "Create .env file"
+      command: "cp /opt/express-api/.env.example /opt/express-api/.env"
+    - action: "Configure systemd service"
+      command: "sudo cp /opt/express-api/express-api.service /etc/systemd/system/"
+    - action: "Enable and start service"
+      command: "sudo systemctl enable express-api && sudo systemctl start express-api"
+  reference:
+    url: "https://github.com/yourorg/express-api/blob/main/README.md"

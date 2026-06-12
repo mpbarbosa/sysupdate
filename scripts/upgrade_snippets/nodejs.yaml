@@ -1,0 +1,149 @@
+# Node.js Runtime Update Configuration
+# 
+# Version: 1.0.0-alpha
+# Date: 2025-11-26
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   1.0.0-alpha (2025-11-26) - Initial version for Node.js runtime updates
+#                            - Supports version managers (nvm, n, fnm)
+#                            - Supports binary installation
+#                            - Supports source builds
+
+# Application identifiers
+application:
+  name: "node"
+  command: "node"
+  display_name: "Node.js"
+  homepage: "https://nodejs.org/"
+
+# Dependencies
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: false  # Only for source builds
+  - name: "python3"
+    command: "python3"
+    help: "Install python3: sudo apt install python3"
+    required: false  # Only for source builds
+  - name: "g++"
+    command: "g++"
+    help: "Install g++: sudo apt install g++"
+    required: false  # Only for source builds
+
+# Messages
+messages:
+  checking_updates: "Checking for Node.js updates..."
+  install_help: |
+    Install Node.js:
+    
+    Option 1 - Version Manager (Recommended):
+      nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+      n: npm install -g n
+      fnm: curl -fsSL https://fnm.vercel.app/install | bash
+    
+    Option 2 - Official Binary:
+      Download from https://nodejs.org/
+    
+    Option 3 - Package Manager:
+      Ubuntu/Debian: sudo apt install nodejs
+      Fedora: sudo dnf install nodejs
+      Arch: sudo pacman -S nodejs
+    
+    Option 4 - Build from Source:
+      See https://github.com/nodejs/node/blob/main/BUILDING.md
+  failed_version: "Failed to get current Node.js version"
+  failed_get_version: "Cannot determine Node.js version"
+  update_success: "Node.js updated successfully"
+  update_failed: "Failed to update Node.js"
+
+# Version extraction
+version:
+  command: "node --version"
+  regex: '^v([0-9]+\.[0-9]+\.[0-9]+)$'
+  source: "github"
+  github_owner: "nodejs"
+  github_repo: "node"
+
+# Update methods
+# Multiple methods supported:
+# 1. Version managers (nvm, n, fnm) - auto-detected
+# 2. Official binaries - downloaded from nodejs.org
+# 3. Build from source - clone and compile
+# 4. Package manager - system package manager
+
+update:
+  # Version manager commands (if detected)
+  nvm_command: "nvm install {version} && nvm use {version} && nvm alias default {version}"
+  n_command: "sudo n {version}"
+  fnm_command: "fnm install {version} && fnm default {version}"
+  
+  # Binary installation
+  binary_url: "https://nodejs.org/dist/v{version}/node-v{version}-linux-{arch}.tar.xz"
+  binary_install_dir: "/usr/local"
+  
+  # Source build
+  source_repo: "https://github.com/nodejs/node.git"
+  build_time_estimate: "20-60 minutes"
+  
+  # Package manager
+  package_names:
+    - "nodejs"
+    - "node"
+
+# Prompts
+prompts:
+  update_method:
+    message: "Choose update method"
+    options: "v/b/s/p"  # version manager, binary, source, package
+    default: "v"
+  confirm_source_build:
+    message: "Building from source takes 20-60 minutes. Continue?"
+    type: "yes_no"
+    default: "n"
+
+# Build instructions for source builds
+build_instructions:
+  dependencies:
+    - git
+    - python3
+    - g++
+    - make
+    - pkg-config
+  steps:
+    - action: "Clone"
+      command: "git clone --depth 1 --branch v{version} https://github.com/nodejs/node.git"
+    - action: "Configure"
+      command: "cd node && ./configure"
+    - action: "Build"
+      command: "make -j$(nproc)"
+    - action: "Install"
+      command: "sudo make install"
+  reference:
+    url: "https://github.com/nodejs/node/blob/main/BUILDING.md"
+  notes: |
+    Building Node.js from source:
+    - Requires 8GB+ RAM for compilation
+    - Takes 20-60 minutes depending on CPU
+    - Uses significant disk space (~2GB)
+    - Consider using official binaries instead for faster installation
+
+# Version manager installation
+version_managers:
+  nvm:
+    install_url: "https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh"
+    install_command: "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash"
+    description: "Node Version Manager - most popular, per-user installation"
+    homepage: "https://github.com/nvm-sh/nvm"
+  n:
+    install_command: "npm install -g n"
+    description: "Simple Node.js version manager - requires Node.js already installed"
+    homepage: "https://github.com/tj/n"
+  fnm:
+    install_url: "https://fnm.vercel.app/install"
+    install_command: "curl -fsSL https://fnm.vercel.app/install | bash"
+    description: "Fast Node Manager - written in Rust, very fast"
+    homepage: "https://github.com/Schniz/fnm"

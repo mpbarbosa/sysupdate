@@ -1,0 +1,65 @@
+# Ghostty Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-05-28
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-05-28) - Initial alpha version
+#                            - Supports apt, snap, and AppImage installations
+#                            - Uses distro candidates for package installs and pkgforge releases for AppImage updates
+#
+
+# Application identifiers
+application:
+  name: "ghostty"
+  command: "ghostty"
+  display_name: "Ghostty"
+
+# Messages
+messages:
+  checking_updates: "Checking Ghostty updates..."
+  install_help: |
+    Install Ghostty using one of the supported Linux distribution channels:
+
+    - APT/Ubuntu package: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mkasberg/ghostty-ubuntu/HEAD/install.sh)"
+    - Snap: sudo snap install ghostty --classic
+    - AppImage: https://github.com/pkgforge-dev/ghostty-appimage/releases
+    - Source build: https://ghostty.org/docs/install/build
+  failed_version: "Failed to get current Ghostty version"
+  failed_latest_version: "Failed to determine the latest Ghostty version for the detected install method"
+  failed_download_url: "Failed to resolve the latest Ghostty AppImage download URL"
+  detected_apt: "Detected: Ghostty installed via apt"
+  detected_snap: "Detected: Ghostty installed via snap"
+  detected_appimage: "Detected: Ghostty installed via AppImage"
+  unknown_install: "Ghostty is installed, but the installation method is not supported by this updater"
+  refreshing_apt: "Refreshing apt metadata and upgrading Ghostty..."
+  refreshing_snap: "Refreshing Ghostty snap..."
+  downloading_appimage: "Downloading latest Ghostty AppImage..."
+  backing_up_appimage: "Backing up current Ghostty AppImage to {path}"
+  installing_appimage: "Installing latest Ghostty AppImage..."
+  creating_symlink: "Updating Ghostty symlink..."
+  update_success: "Ghostty updated successfully to {version}"
+
+# Version extraction
+version:
+  command: "ghostty --version"
+  regex: '([0-9]+(\.[0-9]+)+)'
+  source: "github"
+  github_owner: "pkgforge-dev"
+  github_repo: "ghostty-appimage"
+  apt_package_name: "ghostty"
+  snap_package_name: "ghostty"
+
+# Update configuration
+update:
+  method: "auto_detect"
+  output_lines: 20
+  apt_package_name: "ghostty"
+  snap_package_name: "ghostty"
+  appimage_install_dir: "/opt/Ghostty"
+  appimage_installed_filename: "ghostty.AppImage"
+  appimage_symlink: "/usr/local/bin/ghostty"
+  temp_file_appimage: "/tmp/ghostty_update.AppImage"

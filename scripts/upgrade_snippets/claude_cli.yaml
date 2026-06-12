@@ -1,0 +1,38 @@
+# Anthropic Claude CLI Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-05-02
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-05-02) - Initial alpha version
+#                            - Checks current version from `claude --version`
+#                            - Uses anthropics/claude-code tags as latest version source
+#                            - Updates via the built-in `claude update` command
+
+application:
+  name: "claude"
+  display_name: "Anthropic Claude CLI"
+
+messages:
+  checking_updates: "Checking Anthropic Claude CLI updates..."
+  install_help: |
+    Install Claude Code with one of the official methods:
+      curl -fsSL https://claude.ai/install.sh | bash
+      brew install --cask claude-code
+      npm install -g @anthropic-ai/claude-code   # deprecated install path
+  failed_version: "Failed to get current Anthropic Claude CLI version"
+  update_success: "Anthropic Claude CLI updated"
+
+version:
+  command: "claude --version"
+  regex: '.*([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "github_tags"
+  github_owner: "anthropics"
+  github_repo: "claude-code"
+
+update:
+  command: "claude update"
+  output_lines: 20

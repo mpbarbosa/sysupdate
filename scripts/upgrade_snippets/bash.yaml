@@ -1,0 +1,118 @@
+# Bash Update Configuration
+# Configuration for bash shell upgrade from source
+#
+# Version: 1.1.0-alpha
+# Date: 2025-11-27
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   1.1.0-alpha (2025-11-27) - Changed to Git repository source
+#                            - Uses git://git.savannah.gnu.org/cgit/bash.git
+#                            - Updated build process for Git cloning
+#   1.0.0-alpha (2025-11-27) - Initial alpha version with externalized configuration
+#                            - Aligned with upgrade script pattern v1.1.0
+#                            - Based on tmux.yaml structure
+#                            - Reference: https://www.gnu.org/software/bash/
+
+# Messages
+messages:
+  checking_updates: "Checking bash updates..."
+  install_help: |
+    Install via: apt install bash, brew install bash, or build from source
+    Source: https://www.gnu.org/software/bash/
+    Download: https://ftp.gnu.org/gnu/bash/
+  failed_get_version: "Failed to get current bash version"
+  updating: "Updating bash..."
+  skipping_update: "Skipping bash update"
+  
+  # Build from source messages
+  build:
+    building: "Building bash {version} from source..."
+    install_deps: "Install with: sudo apt install git build-essential autoconf bison libncurses-dev texinfo"
+    missing_compiler: "Missing build dependencies: gcc or clang"
+    install_compiler: "Install with: sudo apt install gcc"
+    cloning: "Cloning bash repository from Savannah..."
+    clone_failed: "Failed to clone bash repository"
+    clone_url: "git://git.savannah.gnu.org/bash.git"
+    checkout_version: "Checking out version {version}..."
+    checkout_failed: "Failed to checkout version {version}, using master branch"
+    running_autoconf: "Running autoconf..."
+    autoconf_failed: "autoconf failed"
+    running_configure: "Running configure..."
+    configure_failed: "configure failed"
+    building_make: "Building bash (this may take a few minutes)..."
+    make_failed: "make failed"
+    testing: "Running make test..."
+    test_failed: "tests failed (continuing anyway)"
+    installing: "Installing bash..."
+    install_failed: "make install failed"
+    build_success: "bash built and installed from source"
+    new_shell_info: "New bash installed to /usr/local/bin/bash. To set as default shell, run: chsh -s /usr/local/bin/bash"
+
+# Application identifiers
+application:
+  name: "bash"
+  command: "bash"
+  display_name: "Bash Shell"
+
+# Version extraction
+version:
+  command: "bash --version | head -n1"
+  regex: '(?<=version )[0-9]+\.[0-9]+\.[0-9]+'
+  source: "git"
+  git_url: "git://git.savannah.gnu.org/bash.git"
+  tag_pattern: '^bash-[0-9]+\.[0-9]+$'
+
+# Update method prompt
+prompts:
+  update_method:
+    message: "Update method: (p)ackage manager or (s)ource build?"
+    options: "p/s"
+    default: "p"
+  
+  build_from_source:
+    message: "Build from source instead?"
+    type: "yes_no"
+
+  run_tests:
+    message: "Run test suite during build? (this may take extra time)"
+    type: "yes_no"
+    default: "n"
+
+# Build from source instructions
+build_instructions:
+  dependencies:
+    - git
+    - build-essential
+    - autoconf
+    - bison
+    - libncurses-dev
+    - texinfo
+  
+  steps:
+    - action: "Clone"
+      command: "git clone git://git.savannah.gnu.org/bash.git"
+    
+    - action: "Checkout"
+      command: "cd bash && git checkout bash-{version}"
+    
+    - action: "Generate configure"
+      command: "autoconf"
+    
+    - action: "Configure"
+      command: "./configure --prefix=/usr/local"
+    
+    - action: "Build"
+      command: "make"
+    
+    - action: "Test (optional)"
+      command: "make test"
+    
+    - action: "Install"
+      command: "sudo make install"
+  
+  reference:
+    url: "https://www.gnu.org/software/bash/"
+    git_url: "git://git.savannah.gnu.org/bash.git"

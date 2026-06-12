@@ -1,0 +1,97 @@
+# Firefox Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2026-01-03
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-01-03) - Initial version migrated from standalone script
+
+# Application identifiers
+application:
+  name: "firefox"
+  command: "firefox"
+  display_name: "Firefox"
+
+# Dependencies
+dependencies:
+  - name: "wget"
+    command: "wget"
+    help: "Install wget: sudo apt install -y wget"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking Firefox updates..."
+  install_help: |
+    Install Firefox from Mozilla's APT repository.
+    This script will set up the repository and install Firefox.
+  failed_version: "Failed to get current Firefox version"
+  update_success: "Firefox updated successfully!"
+  setup_repo: "Setting up Mozilla APT repository..."
+  keyring_dir: "Step 1: Creating APT keyring directory..."
+  importing_key: "Step 2: Importing Mozilla APT repo signing key..."
+  adding_repo: "Step 3: Adding Mozilla repository to sources list..."
+  setting_priority: "Step 4: Setting package priority to prefer Mozilla's DEB..."
+  repo_complete: "Mozilla repository setup complete."
+  removing_snap: "Removing Firefox Snap first..."
+  updating_packages: "Updating package lists and installing Firefox..."
+  install_complete: "Firefox DEB installation complete!"
+  updating_firefox: "Updating Firefox..."
+  update_complete: "Firefox update complete!"
+  detected_snap: "Detected: Firefox Snap version"
+  detected_deb: "Detected: Firefox DEB version"
+  mozilla_configured: "Mozilla repository is configured."
+  mozilla_not_configured: "Firefox DEB is installed but not from Mozilla repository."
+  unknown_type: "Firefox is installed but type cannot be determined."
+  not_installed: "Firefox is not installed."
+  installing_firefox: "Installing Firefox from Mozilla APT repository..."
+
+# Prompts
+prompts:
+  replace_snap:
+    message: "Would you like to replace it with the DEB version from Mozilla's repository?"
+    type: "yes_no"
+    default: "y"
+  setup_mozilla_repo:
+    message: "Would you like to configure Mozilla's repository for future updates?"
+    type: "yes_no"
+    default: "y"
+
+# Version extraction
+version:
+  command: "firefox --version"
+  regex: 'Mozilla Firefox ([0-9]+\.[0-9]+(?:\.[0-9]+)?)'
+  source: "apt"
+  package_name: "firefox"
+
+# Mozilla repository configuration
+repository:
+  keyring_dir: "/etc/apt/keyrings"
+  signing_key_url: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+  signing_key_path: "/etc/apt/keyrings/packages.mozilla.org.asc"
+  sources_list: "/etc/apt/sources.list.d/mozilla.list"
+  sources_entry: "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main"
+  preferences_file: "/etc/apt/preferences.d/mozilla"
+  preferences_content: |
+    Package: *
+    Pin: origin packages.mozilla.org
+    Pin-Priority: 1000
+
+    Package: firefox*
+    Pin: release o=Ubuntu
+    Pin-Priority: -1
+
+# Update commands
+update:
+  method: "apt"
+  check_mozilla_repo_cmd: "grep -q 'packages.mozilla.org' /etc/apt/sources.list.d/mozilla.list 2>/dev/null"
+  update_command: "sudo apt update && sudo apt upgrade -y firefox"
+  install_command: "sudo apt install -y firefox"
+  remove_command: "sudo apt remove -y firefox"
+  snap_check_cmd: "snap list firefox"
+  snap_remove_cmd: "sudo snap remove firefox"
+  snap_update_cmd: "sudo snap refresh firefox"
+  output_lines: 15

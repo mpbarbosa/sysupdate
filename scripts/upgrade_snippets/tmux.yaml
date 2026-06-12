@@ -1,0 +1,101 @@
+# Tmux Update Configuration
+# Extracted from update_tmux.sh lines 24-100, 107-123, 170, 175-176, 222
+#
+# Version: 0.2.2-alpha
+# Date: 2025-11-25
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.2.2-alpha (2025-11-25) - Extracted update messages from line 222 and surrounding
+#                            - Added messages.updating and messages.skipping_update
+#   0.2.1-alpha (2025-11-25) - Extracted git clone URL from line 62
+#                            - Added messages.build.clone_url configuration
+#   0.2.0-alpha (2025-11-25) - Added build_tmux_from_source() function strings
+#                            - Extracted all build process messages
+#                            - Added build error messages
+#                            - Added build step messages
+#   0.1.0-alpha (2025-11-24) - Initial alpha version with externalized configuration
+#                            - Added prompts, messages, and build instructions
+#                            - Not ready for production use
+
+# Messages
+messages:
+  checking_updates: "Checking tmux updates..."
+  install_help: |
+    Install via: apt install tmux, brew install tmux, or build from source
+    Source: https://github.com/tmux/tmux
+  failed_get_version: "Failed to get current tmux version"
+  updating: "Updating tmux..."
+  skipping_update: "Skipping tmux update"
+  
+  # Build from source messages
+  build:
+    building: "Building tmux {version} from source..."
+    install_deps: "Install with: sudo apt install git build-essential autoconf automake pkg-config libevent-dev libncurses-dev bison"
+    missing_compiler: "Missing build dependencies: gcc or clang"
+    install_compiler: "Install with: sudo apt install gcc"
+    cloning: "Cloning tmux repository..."
+    clone_failed: "Failed to clone tmux repository"
+    clone_url: "https://github.com/tmux/tmux.git"
+    checkout_version: "Checking out version {version}..."
+    checkout_failed: "Failed to checkout version {version}, using master branch"
+    running_autogen: "Running autogen.sh..."
+    autogen_failed: "autogen.sh failed"
+    running_configure: "Running configure..."
+    configure_failed: "configure failed"
+    building_make: "Building tmux (this may take a few minutes)..."
+    make_failed: "make failed"
+    installing: "Installing tmux..."
+    install_failed: "make install failed"
+    build_success: "tmux built and installed from source"
+
+# Application identifiers
+application:
+  name: "tmux"
+  display_name: "tmux"
+  command: "tmux"
+
+# Version extraction
+version:
+  command: "tmux -V"
+  regex: 'tmux ([0-9]+\.[0-9]+[a-z]?).*'
+  source: "github"
+  github_owner: "tmux"
+  github_repo: "tmux"
+
+# Update method prompt
+prompts:
+  update_method:
+    message: "Update method: (p)ackage manager or (s)ource build?"
+    options: "p/s"
+    default: "p"
+  
+  build_from_source:
+    message: "Build from source instead?"
+    type: "yes_no"
+
+# Build from source instructions
+build_instructions:
+  dependencies:
+    - libevent-dev
+    - ncurses-dev
+    - build-essential
+    - autoconf
+    - automake
+    - pkg-config
+    - bison
+  
+  steps:
+    - action: "Clone"
+      command: "git clone https://github.com/tmux/tmux.git"
+    
+    - action: "Build"
+      command: "cd tmux && sh autogen.sh && ./configure && make"
+    
+    - action: "Install"
+      command: "sudo make install"
+  
+  reference:
+    url: "https://github.com/tmux/tmux"

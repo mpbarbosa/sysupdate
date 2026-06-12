@@ -1,0 +1,91 @@
+# Oh-My-Bash Update Configuration
+# Configuration for oh-my-bash framework upgrade
+#
+# Version: 1.1.0-alpha
+# Date: 2025-11-27
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   1.1.0-alpha (2025-11-27) - Updated version to match script version
+#   1.0.0-alpha (2025-11-27) - Initial alpha version with externalized configuration
+#                            - Aligned with upgrade script pattern v1.1.0
+#                            - Git commit-based versioning (no releases)
+#                            - Reference: https://github.com/ohmybash/oh-my-bash
+
+# Messages
+messages:
+  checking_updates: "Checking oh-my-bash updates..."
+  install_help: |
+    Install oh-my-bash:
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)"
+    
+    Or manually:
+    git clone https://github.com/ohmybash/oh-my-bash.git ~/.oh-my-bash
+    
+    Reference: https://github.com/ohmybash/oh-my-bash
+  failed_get_version: "Failed to get current oh-my-bash version"
+  not_installed: "oh-my-bash is not installed"
+  not_git_repo: "oh-my-bash directory exists but is not a Git repository"
+  empty_git_repo: "oh-my-bash Git repository has no commits"
+  missing_git_remote: "oh-my-bash Git repository has no origin remote configured"
+  updating: "Updating oh-my-bash..."
+  skipping_update: "Skipping oh-my-bash update"
+  checking_remote: "Checking remote repository..."
+  fetch_failed: "Failed to fetch from remote repository"
+  pulling_updates: "Pulling latest changes..."
+  pull_failed: "Failed to pull updates"
+  update_success: "oh-my-bash updated successfully!"
+  verify_updated_failed: "Failed to verify updated oh-my-bash commit"
+  update_no_change: "oh-my-bash commit did not change after update"
+  verify_remote_failed: "Failed to verify remote oh-my-bash commit after update"
+  update_not_at_remote_head: "oh-my-bash update did not reach the remote branch head"
+  remote_advanced: "Remote branch advanced during update; verified latest commit is now {commit}"
+  already_updated: "oh-my-bash is already up-to-date"
+  commit_info: "Current commit: {commit}"
+  remote_commit_info: "Remote commit: {commit}"
+
+# Application identifiers
+application:
+  name: "oh-my-bash"
+  display_name: "Oh-My-Bash"
+  installation_dir: "${HOME}/.oh-my-bash"
+  git_repo: "https://github.com/ohmybash/oh-my-bash.git"
+
+# Version extraction (Git commit-based)
+version:
+  type: "git_commit"
+  source: "git"
+  git_url: "https://github.com/ohmybash/oh-my-bash.git"
+  installation_path: "${HOME}/.oh-my-bash"
+
+# Update method
+update:
+  method: "git_pull"
+  branch: "master"
+
+# Prompts
+prompts:
+  perform_update:
+    message: "Update oh-my-bash?"
+    type: "yes_no"
+    default: "y"
+  
+  reinstall:
+    message: "Directory exists but is not a Git repository. Reinstall oh-my-bash?"
+    type: "yes_no"
+    default: "n"
+
+# Installation instructions (if not installed)
+installation:
+  method: "curl_script"
+  url: "https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh"
+  alternative:
+    method: "git_clone"
+    url: "https://github.com/ohmybash/oh-my-bash.git"
+    destination: "~/.oh-my-bash"
+  
+  reference:
+    url: "https://github.com/ohmybash/oh-my-bash"
+    wiki: "https://github.com/ohmybash/oh-my-bash/wiki"

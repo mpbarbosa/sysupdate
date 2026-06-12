@@ -1,0 +1,60 @@
+# AWS CLI Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-12-04
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-12-04) - Initial version
+#
+# Reference: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+
+# Application identifiers
+application:
+  name: "aws"
+  command: "aws"
+  display_name: "AWS CLI"
+
+# Dependencies
+dependencies:
+  - name: "curl"
+    command: "curl"
+    help: "Install curl: sudo apt-get install -y curl"
+    required: true
+  - name: "unzip"
+    command: "unzip"
+    help: "Install unzip: sudo apt-get install -y unzip"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking AWS CLI updates..."
+  install_help: |
+    Install AWS CLI v2 on Linux:
+    1. curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    2. unzip awscliv2.zip
+    3. sudo ./aws/install
+    4. aws --version
+    
+    Reference: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+  failed_version: "Failed to get current AWS CLI version"
+  downloading_installer: "Downloading AWS CLI v2 installer..."
+  update_success: "AWS CLI updated successfully!"
+  cleanup_message: "Cleaning up temporary files..."
+
+# Version extraction
+version:
+  command: "aws --version"
+  regex: '.*aws-cli\/([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "github_tags"
+  github_owner: "aws"
+  github_repo: "aws-cli"
+
+# Update configuration
+update:
+  method: "custom_installer"
+  installer_url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+  output_lines: 20
+  requires_sudo: true

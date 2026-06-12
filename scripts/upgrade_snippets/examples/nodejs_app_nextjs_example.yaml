@@ -1,0 +1,92 @@
+# Example: Next.js Application Update Configuration
+# 
+# This is a real-world example for updating a Next.js web application
+# Copy this file and customize for your specific application
+#
+# Version: 1.0.0
+# Date: 2025-11-26
+
+# Application identifiers
+application:
+  name: "nextjs-dashboard"
+  display_name: "Next.js Dashboard Application"
+  directory: "/var/www/nextjs-dashboard"
+  npm_package: "nextjs-dashboard"
+
+# Dependencies
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: true
+  - name: "npm"
+    command: "npm"
+    help: "Install npm: sudo apt install npm"
+    required: true
+  - name: "Node.js"
+    command: "node"
+    help: "Install Node.js v18+: https://nodejs.org/"
+    version: "v18+"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking for Next.js Dashboard updates..."
+  install_help: |
+    Initial setup:
+    git clone https://github.com/yourorg/nextjs-dashboard /var/www/nextjs-dashboard
+    cd /var/www/nextjs-dashboard
+    npm ci
+    npm run build
+    pm2 start npm --name "nextjs-dashboard" -- start
+  failed_version: "Failed to get current version"
+  failed_get_version: "Cannot determine version from package.json"
+  update_success: "Next.js Dashboard updated and restarted successfully"
+  update_failed: "Failed to update Next.js Dashboard"
+
+# Version extraction
+version:
+  command: "node -p \"require('./package.json').version\""
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+.*)$'
+  source: "github"
+  github_owner: "yourorg"
+  github_repo: "nextjs-dashboard"
+
+# Update commands - Next.js requires build step
+update:
+  git_pull_command: "git pull origin main"
+  npm_install_command: "npm ci"
+  build_command: "npm run build"
+  restart_command: "pm2 restart nextjs-dashboard"
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Update Next.js Dashboard?"
+    type: "yes_no"
+    default: "y"
+  restart_service:
+    message: "Restart application with pm2?"
+    type: "yes_no"
+    default: "y"
+
+# Build instructions
+build_instructions:
+  dependencies:
+    - git
+    - nodejs
+    - npm
+    - pm2
+  steps:
+    - action: "Clone repository"
+      command: "git clone https://github.com/yourorg/nextjs-dashboard /var/www/nextjs-dashboard"
+    - action: "Install dependencies"
+      command: "cd /var/www/nextjs-dashboard && npm ci"
+    - action: "Build application"
+      command: "npm run build"
+    - action: "Start with pm2"
+      command: "pm2 start npm --name nextjs-dashboard -- start"
+    - action: "Save pm2 configuration"
+      command: "pm2 save"
+  reference:
+    url: "https://nextjs.org/docs/deployment"

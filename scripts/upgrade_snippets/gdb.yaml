@@ -1,0 +1,114 @@
+# GDB Update Configuration
+# Configuration for updating GNU Debugger (GDB) from source
+#
+# Version: 0.1.0-alpha
+# Date: 2025-12-13
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-12-13) - Initial version for GDB source builds
+#                            - Supports GNU FTP mirror downloads
+#                            - Includes comprehensive build instructions
+
+# Messages
+messages:
+  checking_updates: "🔍 Checking GDB updates..."
+  install_help: |
+    Install via: apt install gdb, yum install gdb, or build from source
+    Source: https://www.gnu.org/software/gdb/
+    FTP: https://ftp.gnu.org/gnu/gdb/
+  failed_get_version: "Failed to get current GDB version"
+  updating: "⬆️ Updating GDB..."
+  skipping_update: "Skipping GDB update"
+  
+  # Build from source messages
+  build:
+    building: "🔨 Building GDB {version} from source..."
+    install_deps: "Install with: sudo apt install build-essential texinfo libgmp-dev libmpfr-dev libexpat1-dev libncurses-dev libreadline-dev python3-dev"
+    missing_compiler: "❌ Missing build dependencies: gcc or clang"
+    install_compiler: "Install with: sudo apt install gcc g++"
+    downloading: "📥 Downloading GDB {version}..."
+    download_failed: "❌ Failed to download GDB tarball"
+    extracting: "📦 Extracting GDB tarball..."
+    extract_failed: "❌ Failed to extract tarball"
+    creating_build_dir: "📁 Creating build directory..."
+    running_configure: "⚙️ Running configure (this may take several minutes)..."
+    configure_failed: "❌ configure failed"
+    building_make: "🔨 Building GDB (this may take 10-30 minutes depending on your system)..."
+    make_failed: "❌ make failed"
+    installing: "📥 Installing GDB..."
+    install_failed: "❌ make install failed"
+    build_success: "✅ GDB built and installed from source successfully"
+    verify_version: "🔍 Verifying installation..."
+
+# Application identifiers
+application:
+  name: "gdb"
+  display_name: "GDB (GNU Debugger)"
+  command: "gdb"
+
+# Version extraction
+version:
+  command: "gdb --version"
+  regex: 'GNU gdb.* ([0-9]+\.[0-9]+(\.[0-9]+)?)'
+  source: "gnu_ftp"
+  ftp_base_url: "https://ftp.gnu.org/gnu/gdb/"
+  version_pattern: 'gdb-([0-9]+\.[0-9]+(\.[0-9]+)?).tar.xz'
+
+# Update method prompt
+prompts:
+  update_method:
+    message: "Update method: (p)ackage manager or (s)ource build?"
+    options: "p/s"
+    default: "p"
+  
+  build_from_source:
+    message: "Build from source instead?"
+    type: "yes_no"
+
+# Build from source instructions
+build_instructions:
+  dependencies:
+    - build-essential
+    - texinfo
+    - libgmp-dev
+    - libmpfr-dev
+    - libexpat1-dev
+    - libncurses-dev
+    - libreadline-dev
+    - python3-dev
+  
+  optional_dependencies:
+    - liblzma-dev
+    - zlib1g-dev
+    - libzstd-dev
+    - libbabeltrace-dev
+    - libsource-highlight-dev
+  
+  steps:
+    - action: "Download"
+      command: "wget https://ftp.gnu.org/gnu/gdb/gdb-{version}.tar.xz"
+    
+    - action: "Extract"
+      command: "tar -xf gdb-{version}.tar.xz"
+    
+    - action: "Configure"
+      command: "cd gdb-{version} && mkdir build && cd build && ../configure --prefix=/usr/local --enable-tui"
+    
+    - action: "Build"
+      command: "make -j$(nproc)"
+    
+    - action: "Install"
+      command: "sudo make install"
+  
+  reference:
+    url: "https://www.gnu.org/software/gdb/"
+    documentation: "https://sourceware.org/gdb/documentation/"
+  
+  # Configure options
+  configure_options:
+    default: "--prefix=/usr/local --enable-tui"
+    recommended: "--prefix=/usr/local --enable-tui --with-python=/usr/bin/python3"
+    minimal: "--prefix=/usr/local"

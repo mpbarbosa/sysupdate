@@ -1,0 +1,134 @@
+# Hyprland Update Configuration
+# Upgrade script for Hyprland wayland compositor
+#
+# Version: 1.0.0-alpha
+# Date: 2025-12-14
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   1.0.0-alpha (2025-12-14) - Initial version for Hyprland compositor
+#                            - Supports source builds and git updates
+#                            - Three update methods: package, git, source
+
+# Application identifiers
+application:
+  name: "Hyprland"
+  display_name: "Hyprland"
+  command: "Hyprland"
+
+# Version extraction
+version:
+  command: "Hyprland --version"
+  regex: '^Hyprland ([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "github"
+  github_owner: "hyprwm"
+  github_repo: "Hyprland"
+
+# Messages
+messages:
+  checking_updates: "🔍 Checking Hyprland updates..."
+  install_help: |
+    Install via: 
+    - Package manager (if available)
+    - Git clone and build from source
+    - Direct source build
+    
+    Source: https://github.com/hyprwm/Hyprland
+    Wiki: https://wiki.hyprland.org/Getting-Started/Installation/
+  failed_get_version: "Failed to get current Hyprland version"
+  updating: "⬆️ Updating Hyprland..."
+  skipping_update: "⏭️ Skipping Hyprland update"
+  
+  # Build from source messages
+  build:
+    building: "🔨 Building Hyprland {version} from source..."
+    install_deps: "📦 Install with: sudo apt install git cmake ninja-build pkg-config meson wayland-protocols libwayland-dev libxkbcommon-dev libglvnd-dev libcairo2-dev libpango1.0-dev libpixman-1-dev libdrm-dev"
+    missing_compiler: "❌ Missing C++ compiler: g++ or clang++"
+    install_compiler: "📦 Install with: sudo apt install g++"
+    cloning: "📥 Cloning Hyprland repository..."
+    clone_failed: "❌ Failed to clone Hyprland repository"
+    clone_url: "https://github.com/hyprwm/Hyprland.git"
+    checkout_version: "🔀 Checking out version {version}..."
+    checkout_failed: "⚠️ Failed to checkout version {version}, using main branch"
+    updating_submodules: "🔄 Updating git submodules..."
+    submodule_failed: "❌ Failed to update submodules"
+    building_make: "🛠️ Building Hyprland (this may take several minutes)..."
+    make_failed: "❌ Build failed"
+    installing: "📥 Installing Hyprland..."
+    install_failed: "❌ Installation failed"
+    build_success: "✅ Hyprland built and installed from source successfully"
+  
+  # Update existing installation messages
+  update:
+    no_git_install: "⚠️ No existing git installation found. Use source build instead."
+    updating_git: "🔄 Updating existing git installation at {path}..."
+    fetching: "📡 Fetching latest changes..."
+    fetch_failed: "❌ Failed to fetch updates"
+    checkout_version: "🔀 Checking out version {version}..."
+    checkout_failed: "❌ Failed to checkout version"
+    pulling: "⬇️ Pulling latest changes..."
+    pull_failed: "❌ Failed to pull changes"
+    update_success: "✅ Hyprland updated successfully"
+    fallback_to_build: "💡 Falling back to fresh source build..."
+
+# Update method prompt
+prompts:
+  update_method:
+    message: "⚙️ Update method: (p)ackage manager, (g)it pull update, or (s)ource build?"
+    options: "p/g/s"
+    default: "p"
+  
+  build_from_source:
+    message: "🔨 Build from source instead?"
+    type: "yes_no"
+
+# Build from source instructions
+build_instructions:
+  dependencies:
+    - git
+    - cmake
+    - ninja-build
+    - pkg-config
+    - meson
+    - gcc-13
+    - g++-13
+    - hwdata
+    - libdisplay-info-dev
+    - libliftoff-dev
+    - wayland-protocols
+    - libwayland-dev
+    - libxkbcommon-dev
+    - libglvnd-dev
+    - libcairo2-dev
+    - libpango1.0-dev
+    - libpixman-1-dev
+    - libdrm-dev
+    - libinput-dev
+    - libxcb1-dev
+    - libxcb-composite0-dev
+    - libxcb-dri3-dev
+    - libxcb-ewmh-dev
+    - libxcb-icccm4-dev
+    - libxcb-present-dev
+    - libxcb-render-util0-dev
+    - libxcb-res0-dev
+    - libxcb-util-dev
+    - libxcb-xfixes0-dev
+    - libxcb-xinput-dev
+    - xdg-desktop-portal-hyprland
+  
+  steps:
+    - action: "Clone"
+      command: "git clone --recursive https://github.com/hyprwm/Hyprland.git && cd Hyprland"
+    
+    - action: "Build"
+      command: "make all"
+    
+    - action: "Install"
+      command: "sudo make install"
+  
+  reference:
+    url: "https://wiki.hyprland.org/Getting-Started/Installation/"
+    build_guide: "https://wiki.hyprland.org/Getting-Started/Installation/#manual-building"

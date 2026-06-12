@@ -1,0 +1,113 @@
+# Node.js Application Update Configuration
+# 
+# Version: 1.0.0-alpha
+# Date: 2025-11-26
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   1.0.0-alpha (2025-11-26) - Initial alpha version for Node.js app updates
+#                            - Supports git pull, npm install, build, restart
+#                            - Template for any Node.js application
+#
+# CONFIGURATION INSTRUCTIONS:
+# 1. Update application.directory to your app's path
+# 2. Update application.name to your app's package name
+# 3. Update version.command if your app has custom version command
+# 4. Update version source (github or npm registry)
+# 5. Customize update commands as needed
+# 6. Configure restart command for your service manager (systemd, pm2, etc.)
+
+# Application identifiers
+application:
+  name: "my-nodejs-app"              # Change to your app package name
+  display_name: "My Node.js App"      # Change to your app display name
+  directory: "/opt/my-nodejs-app"     # Change to your app directory path
+  npm_package: "my-nodejs-app"        # Optional: npm package name if published
+
+# Dependencies
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: true
+  - name: "npm"
+    command: "npm"
+    help: "Install npm: sudo apt install npm"
+    required: true
+  - name: "Node.js"
+    command: "node"
+    help: "Install Node.js: https://nodejs.org/"
+    version: "v18+"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking for Node.js app updates..."
+  install_help: |
+    Clone repository to configured directory:
+    git clone <repository_url> /opt/my-nodejs-app
+    cd /opt/my-nodejs-app
+    npm install
+    npm run build
+  failed_version: "Failed to get current version"
+  failed_get_version: "Failed to get current application version"
+  update_success: "Node.js application updated successfully"
+  update_failed: "Failed to update Node.js application"
+
+# Version extraction
+# Options:
+# 1. From package.json (most common)
+# 2. From git tags
+# 3. From custom version command
+version:
+  command: "node -p \"require('./package.json').version\""
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+.*)$'
+  source: "github"                    # or "npm" if published to npm registry
+  github_owner: "username"            # Change to GitHub username/org
+  github_repo: "my-nodejs-app"        # Change to repository name
+  # For npm source instead:
+  # source: "npm"
+  # npm_package: "my-nodejs-app"
+
+# Update commands
+update:
+  git_pull_command: "git pull origin main"      # or "master", "develop", etc.
+  npm_install_command: "npm ci --production"    # or "npm install" for dev dependencies
+  build_command: "npm run build"                # Set to null or remove if no build step
+  restart_command: "sudo systemctl restart my-nodejs-app"  # or "pm2 restart my-nodejs-app"
+  # Alternative restart commands:
+  # - systemd: "sudo systemctl restart my-nodejs-app"
+  # - pm2: "pm2 restart my-nodejs-app"
+  # - docker: "docker-compose restart my-nodejs-app"
+  # - custom script: "/path/to/restart-script.sh"
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Proceed with update?"
+    type: "yes_no"
+    default: "y"
+  restart_service:
+    message: "Restart service now?"
+    type: "yes_no"
+    default: "y"
+
+# Optional: Build instructions for initial setup
+build_instructions:
+  dependencies:
+    - git
+    - nodejs
+    - npm
+  steps:
+    - action: "Clone"
+      command: "git clone <repository_url> /opt/my-nodejs-app"
+    - action: "Install"
+      command: "cd /opt/my-nodejs-app && npm install"
+    - action: "Build"
+      command: "npm run build"
+    - action: "Configure"
+      command: "cp .env.example .env && edit .env"
+  reference:
+    url: "https://github.com/username/my-nodejs-app"

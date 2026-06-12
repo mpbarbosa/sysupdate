@@ -1,0 +1,43 @@
+# Kitty Terminal Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-11-25
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-11-25) - Initial alpha version with externalized configuration
+#                            - Migrated from hardcoded check_kitty_update.sh
+#                            - Not ready for production use
+
+# Application identifiers
+application:
+  name: "kitty"
+  command: "kitty"
+  display_name: "Kitty terminal"
+
+# Messages
+messages:
+  checking_updates: "Checking Kitty terminal updates..."
+  install_help: |
+    Install Kitty terminal emulator
+    Reference: https://github.com/kovidgoyal/kitty
+  failed_version: "Failed to get current Kitty version"
+  update_success: "Kitty update completed"
+  downloading_installer: "Downloading installer from: https://sw.kovidgoyal.net/kitty/installer.sh"
+
+# Version extraction
+version:
+  command: "kitty --version"
+  regex: '.*\s([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "github"
+  github_owner: "kovidgoyal"
+  github_repo: "kitty"
+
+# Update configuration
+update:
+  installer_url: "https://sw.kovidgoyal.net/kitty/installer.sh"
+  method: "curl_installer"
+  output_lines: 20
+  requires_sudo: false

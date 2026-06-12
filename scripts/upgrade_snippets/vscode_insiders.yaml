@@ -1,0 +1,60 @@
+# VS Code Insiders Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-11-25
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-11-25) - Initial alpha version with externalized configuration
+#                            - Migrated from hardcoded check_vscode_insiders_update.sh
+#                            - Custom version fetching from Microsoft download redirect
+#                            - Not ready for production use
+
+# Application identifiers
+application:
+  name: "code-insiders"
+  command: "code-insiders"
+  display_name: "VSCode Insiders"
+
+# Messages
+messages:
+  checking_updates: "Checking VSCode Insiders updates..."
+  install_help: |
+    Install Visual Studio Code Insiders
+    Reference: https://code.visualstudio.com/insiders
+  failed_version: "Failed to get current VSCode Insiders version"
+  failed_latest_version: "Failed to fetch latest version"
+  failed_download_url: "Failed to get download URL"
+  failed_download: "Failed to download VSCode Insiders"
+  failed_sudo: "Failed to obtain sudo privileges"
+  installation_failed: "Installation failed"
+  update_success: "VSCode Insiders update completed"
+  up_to_date: "VSCode Insiders is up to date"
+  update_available: "VSCode Insiders update available: {current} → {latest}"
+  downloading: "Downloading VSCode Insiders from: {url}"
+  installing: "Installing VSCode Insiders..."
+
+# Version extraction
+version:
+  command: "code-insiders --version"
+  source: "custom"
+  # VSCode Insiders version format: 1.96.0-insider-1732118645
+  # We need custom logic to fetch from download redirect
+  custom_fetch_url: "https://code.visualstudio.com/sha/download?build=insider&os=linux-deb-x64"
+  version_regex: 'code-insiders_([0-9.]+-[0-9]+)_.*'
+  # For comparison, strip the last part after hyphen
+  comparison_strip_suffix: true
+
+# Update configuration
+update:
+  method: "deb_package"
+  download_url_source: "redirect"
+  redirect_url: "https://code.visualstudio.com/sha/download?build=insider&os=linux-deb-x64"
+  temp_file: "/tmp/code-insiders.deb"
+  requires_sudo: true
+  install_command: "dpkg -i"
+  fix_dependencies: "apt-get install -f -y"
+  output_lines: 10
+  cleanup_temp: true

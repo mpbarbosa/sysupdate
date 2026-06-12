@@ -1,0 +1,104 @@
+# Example: Node.js Development Environment Configuration
+# 
+# This configuration is optimized for development environments
+# Targets latest features and version flexibility
+#
+# Version: 1.0.0
+# Date: 2025-11-26
+
+# Application identifiers
+application:
+  name: "node"
+  command: "node"
+  display_name: "Node.js (Development)"
+  homepage: "https://nodejs.org/"
+
+# Dependencies - all optional for dev
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: false
+  - name: "nvm"
+    command: "nvm"
+    help: |
+      Install nvm for easy version switching:
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    required: true  # Recommended for development
+
+# Messages
+messages:
+  checking_updates: "Checking for Node.js updates (development)..."
+  install_help: |
+    Development Setup with nvm:
+      1. Install nvm:
+         curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+      
+      2. Install multiple Node.js versions:
+         nvm install node          # Latest
+         nvm install --lts         # LTS
+         nvm install 20            # Specific major version
+      
+      3. Switch between versions:
+         nvm use node              # Use latest
+         nvm use --lts             # Use LTS
+         nvm use 20                # Use v20.x
+      
+      4. Set default:
+         nvm alias default node    # Default to latest
+  failed_version: "Failed to get Node.js version"
+  update_success: "Node.js updated for development environment"
+
+# Version extraction
+version:
+  command: "node --version"
+  regex: '^v([0-9]+\.[0-9]+\.[0-9]+)$'
+  source: "github"
+  github_owner: "nodejs"
+  github_repo: "node"
+
+# Update methods - prefer nvm for development
+update:
+  nvm_command: "nvm install node && nvm use node && nvm alias default node"
+  n_command: "sudo n latest"
+  fnm_command: "fnm install latest && fnm default latest"
+  binary_url: "https://nodejs.org/dist/v{version}/node-v{version}-linux-{arch}.tar.xz"
+
+# Prompts - default to version manager
+prompts:
+  update_method:
+    message: "Choose update method (nvm recommended for dev)"
+    options: "v/b/s/p"
+    default: "v"
+
+# Development tips
+build_instructions:
+  notes: |
+    Development Best Practices:
+    
+    1. Use nvm for version management:
+       - Easy switching between projects
+       - No sudo needed for global packages
+       - Per-project Node.js versions (.nvmrc)
+    
+    2. Create .nvmrc in project root:
+       echo "20.10.0" > .nvmrc
+       nvm use  # Auto-uses version from .nvmrc
+    
+    3. Multiple versions for testing:
+       nvm install 18  # Test on LTS
+       nvm install 20  # Test on current
+       nvm install 21  # Test on latest
+    
+    4. Global packages per version:
+       nvm use 20
+       npm install -g eslint prettier
+       # These are isolated to Node.js 20
+    
+    5. Quick version switching:
+       nvm use 18     # Switch to 18
+       npm test       # Test
+       nvm use 20     # Switch to 20
+       npm test       # Test again
+  reference:
+    url: "https://github.com/nvm-sh/nvm#usage"

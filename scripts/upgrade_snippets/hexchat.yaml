@@ -1,0 +1,115 @@
+# HexChat Update Configuration
+# Configuration for updating HexChat IRC client from source
+#
+# Version: 0.1.0-alpha
+# Date: 2025-12-13
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-12-13) - Initial version for HexChat source builds
+#                            - Supports GitHub releases and source builds
+#                            - Includes Python plugin support
+
+# Messages
+messages:
+  checking_updates: "🔍 Checking HexChat updates..."
+  install_help: |
+    Install via: apt install hexchat-python3, dnf install hexchat, or build from source
+    Source: https://github.com/hexchat/hexchat
+    Releases: https://github.com/hexchat/hexchat/releases
+  failed_get_version: "Failed to get current HexChat version"
+  updating: "⬆️ Updating HexChat..."
+  skipping_update: "Skipping HexChat update"
+  
+  # Build from source messages
+  build:
+    building: "🔨 Building HexChat {version} from source..."
+    install_deps: "Install with: sudo apt install meson ninja-build python3-dev libglib2.0-dev libgtk-3-dev libssl-dev libpci-dev libdbus-1-dev"
+    missing_compiler: "❌ Missing build dependencies: gcc or clang"
+    install_compiler: "Install with: sudo apt install gcc g++"
+    missing_python: "❌ Python 3 development files not found"
+    install_python: "Install with: sudo apt install python3-dev"
+    downloading: "📥 Downloading HexChat {version}..."
+    download_failed: "❌ Failed to download HexChat tarball"
+    extracting: "📦 Extracting HexChat tarball..."
+    extract_failed: "❌ Failed to extract tarball"
+    running_meson: "⚙️ Running meson setup (this may take a minute)..."
+    meson_failed: "❌ meson setup failed"
+    building_ninja: "🔨 Building HexChat with ninja (this may take 5-10 minutes)..."
+    ninja_failed: "❌ ninja build failed"
+    installing: "📥 Installing HexChat..."
+    install_failed: "❌ ninja install failed"
+    build_success: "✅ HexChat built and installed from source successfully"
+    verify_version: "🔍 Verifying installation..."
+
+# Application identifiers
+application:
+  name: "hexchat"
+  display_name: "HexChat"
+  command: "hexchat"
+
+# Version extraction
+version:
+  command: "hexchat --version"
+  regex: 'hexchat ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "hexchat"
+  github_repo: "hexchat"
+
+# Update method prompt
+prompts:
+  update_method:
+    message: "Update method: (p)ackage manager or (s)ource build?"
+    options: "p/s"
+    default: "p"
+  
+  build_from_source:
+    message: "Build from source instead?"
+    type: "yes_no"
+
+# Build from source instructions
+build_instructions:
+  dependencies:
+    - meson
+    - ninja-build
+    - python3-dev
+    - libglib2.0-dev
+    - libgtk-3-dev
+    - libssl-dev
+    - libpci-dev
+    - libdbus-1-dev
+  
+  optional_dependencies:
+    - libcanberra-dev
+    - libnotify-dev
+    - libproxy-dev
+    - libluajit-5.1-dev
+    - libperl-dev
+  
+  meson_options:
+    default: "-Dwith-python=python3 -Dwith-perl=false -Dwith-lua=false"
+    full: "-Dwith-python=python3 -Dwith-perl=true -Dwith-lua=lua"
+    minimal: "-Dwith-python=false -Dwith-perl=false -Dwith-lua=false"
+  
+  steps:
+    - action: "Download"
+      command: "wget https://github.com/hexchat/hexchat/releases/download/v{version}/hexchat-{version}.tar.xz"
+    
+    - action: "Extract"
+      command: "tar -xf hexchat-{version}.tar.xz"
+    
+    - action: "Setup"
+      command: "cd hexchat-{version} && meson setup build -Dwith-python=python3"
+    
+    - action: "Build"
+      command: "cd build && ninja"
+    
+    - action: "Install"
+      command: "sudo ninja -C build install"
+  
+  reference:
+    url: "https://github.com/hexchat/hexchat"
+    documentation: "https://hexchat.readthedocs.io/en/latest/"
+    build_guide: "https://hexchat.readthedocs.io/en/latest/building.html"

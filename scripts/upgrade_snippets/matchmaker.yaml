@@ -1,0 +1,50 @@
+# Matchmaker CLI Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-05-26
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-05-26) - Initial alpha version
+#                            - Cargo-only install/update workflow
+#                            - Uses GitHub releases for latest version checks
+#
+# Reference: https://github.com/Squirreljetpack/matchmaker
+
+application:
+  name: "mm"
+  command: "mm"
+  display_name: "Matchmaker CLI"
+
+dependencies:
+  - name: "cargo"
+    command: "cargo"
+    help: |
+      Install Rust and Cargo first:
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    required: true
+
+messages:
+  checking_updates: "Checking Matchmaker CLI updates..."
+  install_help: |
+    Install Matchmaker CLI with Cargo:
+      cargo install matchmaker-cli
+
+    Upstream project:
+      https://github.com/Squirreljetpack/matchmaker
+  failed_version: "Failed to get current Matchmaker CLI version"
+  update_success: "Matchmaker CLI installed/updated successfully"
+  install_prompt: "Matchmaker CLI is not installed. Install it now?"
+
+version:
+  command: "cargo install --list | grep '^matchmaker-cli v' | head -1"
+  regex: '^matchmaker-cli v([0-9]+\.[0-9]+\.[0-9]+):$'
+  source: "github"
+  github_owner: "Squirreljetpack"
+  github_repo: "matchmaker"
+
+update:
+  command: "cargo install matchmaker-cli --force"
+  output_lines: 20

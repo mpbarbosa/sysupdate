@@ -1,0 +1,50 @@
+# Oh My Zsh Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-05-04
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-05-04) - Initial alpha version for git-based Oh My Zsh updates
+
+messages:
+  checking_updates: "Checking Oh My Zsh updates..."
+  install_help: |
+    Install Oh My Zsh:
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+    Or manually:
+    git clone https://github.com/ohmyzsh/ohmyzsh.git {path}
+
+    Reference: https://github.com/ohmyzsh/ohmyzsh
+  failed_get_version: "Failed to get current Oh My Zsh version"
+  not_installed: "Oh My Zsh is not installed at {path}; skipping update"
+  not_git_repo: "Oh My Zsh directory exists but is not a Git repository; skipping update"
+  empty_git_repo: "Oh My Zsh Git checkout has no commits yet; skipping update"
+  missing_git_remote: "Oh My Zsh Git checkout has no origin remote configured; skipping update"
+  updating: "Updating Oh My Zsh..."
+  fetch_failed: "Failed to fetch Oh My Zsh updates from origin"
+  pulling_updates: "Pulling latest Oh My Zsh changes..."
+  pull_failed: "Failed to pull Oh My Zsh updates"
+  update_success: "Oh My Zsh updated successfully!"
+  already_updated: "Oh My Zsh is already up to date"
+  commit_info: "Current commit: {commit}"
+  remote_commit_info: "Remote commit: {commit}"
+
+application:
+  name: "zsh"
+  display_name: "Oh My Zsh"
+  installation_dir: "${ZSH:-${HOME}/.oh-my-zsh}"
+  git_repo: "https://github.com/ohmyzsh/ohmyzsh.git"
+
+version:
+  type: "git_commit"
+  source: "git"
+  git_url: "https://github.com/ohmyzsh/ohmyzsh.git"
+  installation_path: "${ZSH:-${HOME}/.oh-my-zsh}"
+
+update:
+  method: "git_pull"
+  branch: "master"

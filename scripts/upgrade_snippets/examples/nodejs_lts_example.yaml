@@ -1,0 +1,78 @@
+# Example: Node.js LTS (Long Term Support) Configuration
+# 
+# This configuration targets Node.js LTS versions for production use
+# LTS versions receive support for 30 months
+#
+# Version: 1.0.0
+# Date: 2025-11-26
+
+# Application identifiers
+application:
+  name: "node"
+  command: "node"
+  display_name: "Node.js LTS"
+  homepage: "https://nodejs.org/en/about/previous-releases"
+
+# Dependencies
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git: sudo apt install git"
+    required: false
+  - name: "python3"
+    command: "python3"
+    help: "Install python3: sudo apt install python3"
+    required: false
+
+# Messages
+messages:
+  checking_updates: "Checking for Node.js LTS updates..."
+  install_help: |
+    Install Node.js LTS via nvm:
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+      nvm install --lts
+      nvm use --lts
+      nvm alias default lts/*
+    
+    Or download from: https://nodejs.org/
+  failed_version: "Failed to get current Node.js version"
+  update_success: "Node.js LTS updated successfully"
+
+# Version extraction - targets LTS
+version:
+  command: "node --version"
+  regex: '^v([0-9]+\.[0-9]+\.[0-9]+)$'
+  source: "github"
+  github_owner: "nodejs"
+  github_repo: "node"
+  # Note: Script will fetch latest release
+  # For LTS-only, use nvm with --lts flag
+
+# Update methods - prefer version manager for LTS
+update:
+  nvm_command: "nvm install --lts && nvm use --lts && nvm alias default lts/*"
+  n_command: "sudo n lts"
+  fnm_command: "fnm install --lts && fnm default lts-latest"
+  binary_url: "https://nodejs.org/dist/v{version}/node-v{version}-linux-{arch}.tar.xz"
+
+# Prompts
+prompts:
+  update_method:
+    message: "Choose update method for Node.js LTS"
+    options: "v/b/s/p"
+    default: "v"
+
+# Notes for LTS versions
+build_instructions:
+  notes: |
+    Node.js LTS Versions (Active as of 2025):
+    - Node.js 20.x (Active LTS until 2026-04-30)
+    - Node.js 18.x (Maintenance LTS until 2025-04-30)
+    
+    Recommended for:
+    - Production servers
+    - Enterprise applications
+    - Long-term projects
+    
+    Update frequency: Security updates only
+    Support period: 30 months from release

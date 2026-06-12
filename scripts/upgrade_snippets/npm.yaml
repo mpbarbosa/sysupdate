@@ -1,0 +1,50 @@
+# npm Update Configuration
+# 
+# Version: 1.0.0-alpha
+# Date: 2025-11-26
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Reference: https://docs.npmjs.com/try-the-latest-stable-version-of-npm
+#
+# Version History:
+#   1.0.0-alpha (2025-11-26) - Initial alpha version with externalized configuration
+#                            - Uses npm install -g npm@latest for upgrade
+#                            - Added application identifiers, messages, and dependencies
+
+# Application identifiers
+application:
+  name: "npm"
+  display_name: "npm (Node Package Manager)"
+  npm_package: "npm"
+
+# Dependencies
+dependencies:
+  - name: "Node.js"
+    command: "node"
+    help: |
+      Install Node.js first to use npm
+      Download from: https://nodejs.org/
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking npm updates..."
+  install_help: |
+    npm comes bundled with Node.js
+    Download from: https://nodejs.org/
+    To upgrade npm: npm install -g npm@latest
+  failed_version: "Failed to get current npm version"
+  update_success: "npm updated successfully"
+
+# Version extraction
+version:
+  command: "npm --version"
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "npm"
+
+# Update commands
+update:
+  command: "npm install -g npm@latest"
+  output_lines: 15

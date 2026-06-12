@@ -1,0 +1,70 @@
+# Google Chrome Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-11-29
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Reference: https://support.google.com/chrome/a/answer/9025903?hl=en
+#
+# Version History:
+#   0.1.0-alpha (2025-11-29) - Initial alpha version with externalized configuration
+#                            - Supports installation and update via apt
+#                            - Not ready for production use
+
+# Application identifiers
+application:
+  name: "google-chrome-stable"
+  command: "google-chrome-stable"
+  display_name: "Google Chrome"
+
+# Dependencies
+dependencies:
+  - name: "wget"
+    command: "wget"
+    help: "Install wget: sudo apt-get install -y wget"
+    required: true
+
+# Messages
+messages:
+  checking_updates: "Checking Google Chrome updates..."
+  install_help: |
+    Install Google Chrome:
+    1. Download and add Google signing key:
+       wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+    2. Add repository:
+       echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+    3. Update and install:
+       sudo apt-get update && sudo apt-get install -y google-chrome-stable
+    Reference: https://support.google.com/chrome/a/answer/9025903?hl=en
+  failed_version: "Failed to get current Google Chrome version"
+  update_success: "Google Chrome updated successfully"
+  already_installed: "Google Chrome repository is already configured"
+  repo_setup_success: "Google Chrome repository configured successfully"
+  installing: "Installing Google Chrome..."
+
+# Version extraction
+version:
+  command: "google-chrome-stable --version"
+  regex: 'Google Chrome ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'
+  source: "apt"
+  package_name: "google-chrome-stable"
+
+# Update configuration
+update:
+  method: "apt"
+  pre_install_steps:
+    - action: "add_signing_key"
+      command: "wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg"
+      description: "Adding Google signing key"
+    - action: "add_repository"
+      command: "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list"
+      description: "Configuring Chrome repository"
+    - action: "update_cache"
+      command: "sudo apt-get update"
+      description: "Updating package cache"
+  install_command: "sudo apt-get install -y google-chrome-stable"
+  update_command: "sudo apt-get update && sudo apt-get install --only-upgrade -y google-chrome-stable"
+  output_lines: 15
+  requires_sudo: true

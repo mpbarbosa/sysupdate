@@ -1,0 +1,54 @@
+# Firmware Update Configuration
+# 
+# Version: 0.1.0-alpha
+# Date: 2025-12-18
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2025-12-18) - Initial version
+
+# Application identifiers
+application:
+  name: "fwupd"
+  command: "fwupdmgr"
+  display_name: "fwupd (Firmware Updater)"
+
+# Messages
+messages:
+  checking_updates: "Checking fwupd updates..."
+  install_help: |
+    Install fwupd via package manager:
+    - Debian/Ubuntu: sudo apt install fwupd
+    - Fedora: sudo dnf install fwupd
+    Reference: https://fwupd.org/
+  failed_version: "Failed to get current fwupd version"
+  update_success: "fwupd updated successfully"
+  checking_firmware: "Checking for firmware updates..."
+  no_firmware_updates: "No firmware updates available"
+  firmware_updates_available: "Firmware updates available"
+  updating_firmware: "Updating firmware..."
+  firmware_update_success: "Firmware updated successfully"
+  firmware_update_failed: "Firmware update failed"
+  refresh_metadata: "Refreshing firmware metadata..."
+
+# Version extraction
+version:
+  command: "fwupdmgr --version"
+  regex: '.*org.freedesktop.fwupd[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*'
+  source: "apt"
+  package_name: "fwupd"
+
+# Update commands
+update:
+  method: "apt"
+  update_command: "sudo apt-get update && sudo apt-get install --only-upgrade -y fwupd"
+  output_lines: 15
+
+# Firmware check and update
+firmware:
+  refresh_command: "fwupdmgr refresh"
+  check_command: "fwupdmgr get-updates"
+  update_command: "fwupdmgr update"
+  requires_sudo: false

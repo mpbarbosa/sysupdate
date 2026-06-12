@@ -1,0 +1,76 @@
+# Cursor IDE Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-05-18
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-05-18) - Initial alpha version
+#                            - Supports .deb and AppImage installations
+#                            - Version detection via download redirect URL
+#
+# Reference: https://www.cursor.com/
+
+# Application identifiers
+application:
+  name: "cursor"
+  command: "cursor"
+  display_name: "Cursor IDE"
+
+# Messages
+messages:
+  checking_updates: "Checking Cursor IDE updates..."
+  install_help: |
+    Install Cursor IDE:
+
+    Via .deb package (recommended for Debian/Ubuntu):
+      wget "https://api2.cursor.sh/updates/download/golden/linux-x64-deb/cursor/latest" -O cursor.deb
+      sudo dpkg -i cursor.deb && sudo apt-get install -f
+
+    Via AppImage:
+      wget "https://api2.cursor.sh/updates/download/golden/linux-x64/cursor/latest" -O cursor.AppImage
+      chmod +x cursor.AppImage
+      sudo mkdir -p /opt/Cursor
+      sudo mv cursor.AppImage /opt/Cursor/cursor.AppImage
+      sudo ln -s /opt/Cursor/cursor.AppImage /usr/local/bin/cursor
+
+    Reference: https://www.cursor.com/
+  failed_version: "Failed to get current Cursor version"
+  update_success: "Cursor IDE updated successfully"
+  downloading_deb: "Downloading latest Cursor .deb package..."
+  downloading_appimage: "Downloading latest Cursor AppImage..."
+  installing: "Installing Cursor IDE..."
+  backing_up: "Backing up existing AppImage..."
+  creating_symlink: "Creating symbolic link..."
+  creating_desktop: "Creating desktop entry..."
+
+# Version extraction
+version:
+  # cursor --version outputs: "<version>\n<commit>\n<arch>"
+  command: "cursor --version"
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+)'
+  # Latest version resolved by following the AppImage download redirect URL
+  # e.g. redirects to: Cursor-3.4.20-x86_64.AppImage
+  source: "url_redirect"
+  download_url_version: "https://api2.cursor.sh/updates/download/golden/linux-x64/cursor/latest"
+
+# Update configuration
+update:
+  method: "auto_detect"
+  download_url_deb: "https://api2.cursor.sh/updates/download/golden/linux-x64-deb/cursor/latest"
+  download_url_appimage: "https://api2.cursor.sh/updates/download/golden/linux-x64/cursor/latest"
+  appimage_install_dir: "/opt/Cursor"
+  appimage_symlink: "/usr/local/bin/cursor"
+  temp_file_deb: "/tmp/cursor_update.deb"
+  temp_file_appimage: "/tmp/cursor_update.AppImage"
+  output_lines: 20
+  fix_dependencies: "apt-get install -f -y"
+  requires_sudo: true
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Update Cursor IDE?"
+    type: "yes_no"
