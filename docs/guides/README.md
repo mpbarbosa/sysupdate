@@ -26,6 +26,7 @@ integration-boundary risk. Imported guides focus on those realities.
 | [Incremental Change Guide](./INCREMENTAL_CHANGE_GUIDE.md) | The CI/CD pipeline provides verification gates; all AI-assisted work should use the stacked change pattern. |
 | [Naming Guide](./NAMING_GUIDE.md) | The mixed-language codebase (Bash, TypeScript, YAML, env vars, snippet IDs) needs explicit per-layer naming conventions. |
 | [Error Handling Guide](./ERROR_HANDLING_GUIDE.md) | Errors span Bash exit codes, Node.js child process events, and React UI states — each layer has distinct handling rules. |
+| [Claude Code Workflow Guide](./CLAUDE_CODE_WORKFLOW_GUIDE.md) | Operational patterns for Claude Code sessions: prompt construction, tool call review, verification rhythm, course correction, and commit discipline. |
 
 ## Not imported
 
@@ -58,11 +59,14 @@ integration-boundary risk. Imported guides focus on those realities.
 6. Use [React Guide](./REACT_GUIDE.md) when changing `web/src/`.
 7. Use [Incremental Change Guide](./INCREMENTAL_CHANGE_GUIDE.md) for
    structuring Claude Code sessions.
-8. Use [Naming Guide](./NAMING_GUIDE.md) when adding env vars, snippet IDs,
+8. Use [Claude Code Workflow Guide](./CLAUDE_CODE_WORKFLOW_GUIDE.md) for
+   session-level operational patterns: prompt construction, reviewing tool
+   calls, course correction, and commit discipline.
+9. Use [Naming Guide](./NAMING_GUIDE.md) when adding env vars, snippet IDs,
    YAML keys, or TypeScript types.
-9. Use [Error Handling Guide](./ERROR_HANDLING_GUIDE.md) when adding new
-   snippet failure modes or backend route error responses.
-10. Use [LLM Context Efficiency Guide](./LLM_CONTEXT_GUIDE.md) when
+10. Use [Error Handling Guide](./ERROR_HANDLING_GUIDE.md) when adding new
+    snippet failure modes or backend route error responses.
+11. Use [LLM Context Efficiency Guide](./LLM_CONTEXT_GUIDE.md) when
     `CLAUDE.md` files need updating or snippet patterns are diverging.
 
 ## Canonical command reference
