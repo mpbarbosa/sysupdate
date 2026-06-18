@@ -37,13 +37,9 @@ check_updates_available
 There is no automated test suite; validation is `bash -n` / `shellcheck` plus manual sourcing of
 modules as shown above.
 
-Cross-cutting engineering and testing guidance adapted for this repo lives in
-`docs/guides/`. Start with `docs/guides/README.md`, then use:
+Engineering guides for this repo (when to use each one is in the index below):
 
-- `docs/guides/CODE_QUALITY_CONTROL_GUIDE.md` for review and validation expectations
-- `docs/guides/CLEAN_ARCHITECTURE_GUIDE.md` for placement and dependency direction
-- `docs/guides/INTEGRATION_TEST_GUIDE.md` and `docs/guides/E2E_TEST_GUIDE.md` for
-  boundary-heavy CLI/backend/UI changes
+@docs/guides/README.md
 
 ## Architecture
 
