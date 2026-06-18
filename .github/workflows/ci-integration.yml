@@ -1,0 +1,55 @@
+name: CI – Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'web/backend/**'
+      - 'tests/integration/**'
+      - 'tests/backend/**'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'web/backend/**'
+      - 'tests/integration/**'
+      - 'tests/backend/**'
+
+jobs:
+  cli-integration:
+    name: CLI integration tests (BATS)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats
+
+      - name: Run CLI integration tests
+        run: bats tests/integration/
+
+  backend-integration:
+    name: Backend bridge integration tests (node:test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Run backend bridge integration tests
+        run: node --test tests/backend/server.test.mjs

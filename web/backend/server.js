@@ -6,12 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { mapTerminalType, stripAnsi, trimArray, sanitizeSnippetId } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WEB_DIR = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(WEB_DIR, '..');
-const SCRIPT_PATH = path.resolve(REPO_ROOT, 'scripts', 'system_update.sh');
+const SCRIPT_PATH = process.env.SYSUPDATE_SCRIPT_PATH ?? path.resolve(REPO_ROOT, 'scripts', 'system_update.sh');
 
 const HOST = process.env.SYSUPDATE_WEB_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.SYSUPDATE_WEB_PORT ?? '4174');
@@ -39,39 +40,6 @@ function sendJson(response, statusCode, payload) {
   response.setHeader('Content-Type', 'application/json; charset=utf-8');
   setCorsHeaders(response);
   response.end(JSON.stringify(payload));
-}
-
-function mapTerminalType(lineType) {
-  switch (lineType) {
-    case 'prompt':
-      return 'prompt';
-    case 'info':
-    case 'section_header':
-    case 'operation_header':
-      return 'info';
-    case 'success':
-      return 'success';
-    case 'warning':
-      return 'warning';
-    case 'error':
-      return 'error';
-    case 'dim':
-      return 'dim';
-    default:
-      return 'output';
-  }
-}
-
-function stripAnsi(text) {
-  return text.replace(/\u001b\[[0-9;]*m/g, '');
-}
-
-function trimArray(items, limit) {
-  if (items.length <= limit) {
-    return items;
-  }
-
-  return items.slice(items.length - limit);
 }
 
 function createRunState(args) {
@@ -312,18 +280,6 @@ function attachLineReader(stream, streamName) {
       processOutputLine(buffer, streamName);
     }
   });
-}
-
-function sanitizeSnippetId(value) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return null;
-  }
-
-  if (!/^[a-zA-Z0-9._-]+$/.test(value)) {
-    return null;
-  }
-
-  return value;
 }
 
 function startRun(options = {}) {

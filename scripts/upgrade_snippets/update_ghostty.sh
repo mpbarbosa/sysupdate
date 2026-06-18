@@ -115,7 +115,7 @@ is_ghostty_apt() {
         return 1
     fi
 
-    if ! dpkg -l 2>/dev/null | grep -q "^ii[[:space:]]\+$package_name[[:space:]]"; then
+    if ! dpkg -l 2>/dev/null | grep -q "^ii[[:space:]]\+${package_name}[[:space:]]"; then
         return 1
     fi
 

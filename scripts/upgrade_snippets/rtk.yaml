@@ -1,0 +1,36 @@
+# RTK (Rust Token Killer) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-18
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-18) - Initial alpha version
+#                            - Checks active version from `rtk --version`
+#                            - Resolves latest release from rtk-ai/rtk GitHub releases
+#                            - Updates by downloading the architecture-specific tarball
+#
+# Reference: https://github.com/rtk-ai/rtk
+
+application:
+  name: "rtk"
+  display_name: "RTK (Rust Token Killer)"
+
+messages:
+  checking_updates: "Checking RTK updates..."
+  install_help: |
+    Install RTK from GitHub releases:
+      https://github.com/rtk-ai/rtk/releases
+    Download the rtk-x86_64-unknown-linux-musl.tar.gz (or aarch64) tarball,
+    extract the binary, and place it in ~/.local/bin/.
+  failed_version: "Failed to get current RTK version"
+  update_success: "RTK updated successfully"
+
+version:
+  command: "rtk --version"
+  regex: 'rtk ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "rtk-ai"
+  github_repo: "rtk"

@@ -1,0 +1,59 @@
+name: CI – Bash
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'tests/bash/**'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'tests/bash/**'
+
+jobs:
+  lint:
+    name: Syntax check & ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
+      - name: bash -n (syntax check)
+        run: |
+          bash -n scripts/system_update.sh
+          bash -n scripts/lib/*.sh
+          bash -n scripts/upgrade_snippets/*.sh
+
+      - name: ShellCheck
+        # SC1091: dynamic source paths that can't be followed statically — known
+        #         limitation of the snippet framework; suppressed project-wide.
+        # SC2034: CONFIG_FILE is consumed by upgrade_utils.sh after being set in
+        #         snippets; shellcheck can't see across source boundaries.
+        run: |
+          shellcheck \
+            --severity=error \
+            --exclude=SC1091,SC2034 \
+            scripts/system_update.sh \
+            scripts/lib/*.sh \
+            scripts/upgrade_snippets/*.sh
+
+  test:
+    name: BATS unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats yq
+
+      - name: Run BATS tests
+        run: bats tests/bash/

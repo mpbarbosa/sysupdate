@@ -1,0 +1,33 @@
+# Zsh Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-13
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-13) - Initial alpha version
+#                            - Checks active zsh version from `zsh --version`
+#                            - Resolves latest package version from the active package manager
+#                            - Updates zsh through the shared package-manager helpers
+
+application:
+  name: "zsh"
+  command: "zsh"
+  display_name: "Zsh Shell"
+
+messages:
+  checking_updates: "Checking zsh updates..."
+  install_help: |
+    Install zsh with your package manager:
+      sudo apt install zsh
+      sudo pacman -S zsh
+      brew install zsh
+  failed_get_version: "Failed to get current zsh version"
+  failed_latest_version: "Failed to determine the latest zsh package version"
+  update_success: "Zsh Shell updated successfully"
+
+version:
+  command: "zsh --version"
+  regex: 'zsh ([0-9]+\.[0-9]+(\.[0-9]+)?)'

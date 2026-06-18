@@ -69,7 +69,7 @@ build_hexchat_from_source() {
   fi
   
   # Check for Python 3 development files
-  if ! command -v python3-config &>/dev/null && ! [ -f /usr/include/python3.*/Python.h ]; then
+  if ! command -v python3-config &>/dev/null && ! compgen -G "/usr/include/python3.*/Python.h" > /dev/null 2>&1; then
     local missing_python
     missing_python=$(get_config "messages.build.missing_python")
     print_warning "$missing_python"

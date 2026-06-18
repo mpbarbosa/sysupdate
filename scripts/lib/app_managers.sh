@@ -18,7 +18,7 @@ fi
 source_upgrade_snippets() {
     # Load upgrade snippets from ../upgrade_snippets if present.
     # When SNIPPET_ID_FILTER is set, only the snippet with matching ID is sourced.
-    SNIPPETS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upgrade_snippets"
+    SNIPPETS_DIR="${SYSUPDATE_SNIPPETS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upgrade_snippets}"
     if [ -d "$SNIPPETS_DIR" ]; then
         for _f in "$SNIPPETS_DIR"/*.sh; do
             [ -r "$_f" ] || continue
@@ -34,7 +34,7 @@ source_upgrade_snippets() {
 
 list_upgrade_snippets() {
     local snippets_dir
-    snippets_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upgrade_snippets"
+    snippets_dir="${SYSUPDATE_SNIPPETS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upgrade_snippets}"
 
     print_section_header "UPGRADE SNIPPETS"
     printf "%-20s %s\n" "ID" "NAME"

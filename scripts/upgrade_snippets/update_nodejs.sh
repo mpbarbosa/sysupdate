@@ -277,7 +277,14 @@ perform_nodejs_update() {
     local method
     method="$(prompt_input "${prompt_msg%: }" "$default" "v|b|s|p")"
     method=${method:-$default}
-    
+
+    # Fall back to default if the response isn't a valid method option (e.g. when
+    # SYSUPDATE_PROMPT_INPUT re-delivers the outer "y" confirmation answer here).
+    case "$method" in
+        v|V|b|B|s|S|p|P) ;;
+        *) method="$default" ;;
+    esac
+
     case "$method" in
         v|V)
             if [ "$vm" = "nvm" ]; then
@@ -305,10 +312,6 @@ perform_nodejs_update() {
                 print_error "Package manager update failed"
                 return 1
             fi
-            ;;
-        *)
-            print_error "Invalid option: $method"
-            return 1
             ;;
     esac
 }
