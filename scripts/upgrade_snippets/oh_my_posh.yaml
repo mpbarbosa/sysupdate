@@ -1,0 +1,41 @@
+# Oh My Posh (prompt theme engine) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-21
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-21) - Initial alpha version
+#                            - Checks current version from `oh-my-posh version`
+#                            - Uses JanDeDobbeleer/oh-my-posh releases as latest source
+#                            - Updates via the built-in `oh-my-posh upgrade` command
+#
+# Reference: https://github.com/JanDeDobbeleer/oh-my-posh
+
+application:
+  name: "oh-my-posh"
+  display_name: "Oh My Posh"
+
+messages:
+  checking_updates: "Checking Oh My Posh updates..."
+  install_help: |
+    Install Oh My Posh with the official installer:
+      curl -s https://ohmyposh.dev/install.sh | bash -s
+  failed_version: "Failed to get current Oh My Posh version"
+  update_success: "Oh My Posh updated"
+
+version:
+  command: "oh-my-posh version"
+  # Anchored at start: `oh-my-posh version` prints a bare version, and the
+  # shared extract_version wraps this in `.*PATTERN.*`, so without `^` the
+  # leading `.*` steals the first digit of a two-digit major (25 -> 5).
+  regex: '^([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "JanDeDobbeleer"
+  github_repo: "oh-my-posh"
+
+update:
+  command: "oh-my-posh upgrade"
+  output_lines: 20

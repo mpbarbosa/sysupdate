@@ -1,0 +1,40 @@
+# uv (Astral Python package/project manager) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-21
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-21) - Initial alpha version
+#                            - Checks current version from `uv --version`
+#                            - Uses astral-sh/uv GitHub releases as latest source
+#                            - Updates via the built-in `uv self update` command
+#
+# Reference: https://github.com/astral-sh/uv
+
+application:
+  name: "uv"
+  display_name: "uv (Astral)"
+
+messages:
+  checking_updates: "Checking uv updates..."
+  install_help: |
+    Install uv with the official standalone installer:
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+    (uv self update only works for installs from the standalone installer,
+    not for uv installed via a system package manager.)
+  failed_version: "Failed to get current uv version"
+  update_success: "uv updated"
+
+version:
+  command: "uv --version"
+  regex: 'uv ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "astral-sh"
+  github_repo: "uv"
+
+update:
+  command: "uv self update"
+  output_lines: 20

@@ -1,0 +1,39 @@
+# Poetry (Python dependency manager) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-21
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-21) - Initial alpha version
+#                            - Checks current version from `poetry --version`
+#                            - Uses python-poetry/poetry releases as latest source
+#                            - Updates via the built-in `poetry self update` command
+#
+# Reference: https://github.com/python-poetry/poetry
+
+application:
+  name: "poetry"
+  display_name: "Poetry"
+
+messages:
+  checking_updates: "Checking Poetry updates..."
+  install_help: |
+    Install Poetry with the official installer:
+      curl -sSL https://install.python-poetry.org | python3 -
+    (poetry self update only works for installs from the official installer.)
+  failed_version: "Failed to get current Poetry version"
+  update_success: "Poetry updated"
+
+version:
+  command: "poetry --version"
+  regex: 'version ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "python-poetry"
+  github_repo: "poetry"
+
+update:
+  command: "poetry self update"
+  output_lines: 20

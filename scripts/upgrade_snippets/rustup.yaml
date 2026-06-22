@@ -1,0 +1,44 @@
+# rustup (Rust toolchain installer) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-21
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Scope: updates the rustup tool itself (`rustup self update`). Updating the
+# installed Rust toolchains (`rustup update`) and Cargo packages is handled by
+# the separate `cargo` snippet (cargo_manager.sh) to avoid duplication.
+#
+# Version History:
+#   0.1.0-alpha (2026-06-21) - Initial alpha version
+#                            - Checks current version from `rustup --version`
+#                            - Uses rust-lang/rustup GitHub releases as latest source
+#                            - Updates via the built-in `rustup self update` command
+#
+# Reference: https://github.com/rust-lang/rustup
+
+application:
+  name: "rustup"
+  display_name: "rustup (Rust toolchain installer)"
+
+messages:
+  checking_updates: "Checking rustup updates..."
+  install_help: |
+    Install rustup with the official installer:
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    (rustup self update is disabled when rustup is installed via a system
+    package manager.)
+  failed_version: "Failed to get current rustup version"
+  update_success: "rustup updated"
+
+version:
+  command: "rustup --version"
+  regex: 'rustup ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "rust-lang"
+  github_repo: "rustup"
+
+update:
+  command: "rustup self update"
+  output_lines: 20

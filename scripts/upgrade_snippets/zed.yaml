@@ -1,0 +1,44 @@
+# Zed (code editor) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-21
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-21) - Initial alpha version
+#                            - Checks current version from `zed --version`
+#                            - Uses zed-industries/zed GitHub releases as latest source
+#                            - Updates by re-running the official install.sh installer
+#
+# Note: the stable GitHub release is used as the latest-version source. Zed also
+# self-updates from within the GUI; this snippet refreshes the standalone
+# (~/.local/zed.app) install used by the `zed` CLI launcher.
+#
+# Reference: https://github.com/zed-industries/zed
+
+application:
+  name: "zed"
+  display_name: "Zed Editor"
+
+messages:
+  checking_updates: "Checking Zed updates..."
+  install_help: |
+    Install Zed with the official installer:
+      curl -f https://zed.dev/install.sh | sh
+  failed_version: "Failed to get current Zed version"
+  downloading_installer: "Downloading Zed installer..."
+  update_success: "Zed updated"
+
+version:
+  command: "zed --version"
+  regex: 'Zed ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "zed-industries"
+  github_repo: "zed"
+
+update:
+  method: "curl_installer"
+  installer_url: "https://zed.dev/install.sh"
+  output_lines: 20
