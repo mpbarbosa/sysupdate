@@ -299,8 +299,211 @@ get_apt_latest_version() {
     if [ "$verbose" = "true" ]; then
         print_status "Latest version for $package: $version"
     fi
-    
+
     echo "$version"
+}
+
+#=============================================================================
+# NPM HEALTH (detect + repair a corrupted global npm install)
+#=============================================================================
+#
+# A partial npm self-update can leave the global npm with an internally
+# inconsistent dependency tree (e.g. sibling packages requiring different
+# `minipass` majors). `npm --version` still works, but anything that loads
+# `cacache` crashes with "Class extends value ... is not a constructor or
+# null". This corruption breaks every npm-based snippet, so detection and
+# repair live here in the shared layer rather than in any one snippet.
+
+# Pure matcher: does the given npm output show the dependency-tree corruption
+# signature? Kept side-effect free so it is unit-testable from a fixture.
+# Usage: npm_output_indicates_corruption "<captured npm stderr/stdout>"
+# Returns: 0 if the signature is present, 1 otherwise
+npm_output_indicates_corruption() {
+    local text="$1"
+    printf '%s' "$text" | grep -qiE 'Class extends value .* is not a constructor or null'
+}
+
+# Resolve the global node_modules directory that owns a given npm binary,
+# deriving it from the binary path so it works even when npm itself is broken.
+# Usage: npm_global_modules_dir "<npm_bin>"
+# Returns: path to <prefix>/lib/node_modules, or empty on failure
+npm_global_modules_dir() {
+    local npm_bin="$1"
+    local resolved
+
+    if command -v "$npm_bin" >/dev/null 2>&1; then
+        resolved=$(command -v "$npm_bin")
+    else
+        resolved="$npm_bin"
+    fi
+    resolved=$(readlink -f "$resolved" 2>/dev/null || echo "$resolved")
+
+    # Symlink target is usually <prefix>/lib/node_modules/npm/bin/npm-cli.js
+    case "$resolved" in
+        */npm/bin/npm-cli.js)
+            printf '%s\n' "${resolved%/npm/bin/npm-cli.js}"
+            return 0
+            ;;
+    esac
+
+    # Fallback: <bindir>/../lib/node_modules
+    local cand
+    cand="$(dirname "$resolved")/../lib/node_modules"
+    if [ -d "$cand" ]; then
+        (cd "$cand" && pwd)
+        return 0
+    fi
+
+    # Last resort: ask npm (root -g does not load cacache, so it survives)
+    "$npm_bin" root -g 2>/dev/null
+}
+
+# Functional health probe: runs a cacache-loading offline npm command and
+# classifies the result.
+# Usage: probe_npm_health "<npm_bin>"
+# Returns: 0 healthy, 2 known corruption signature, 1 other/inconclusive failure
+probe_npm_health() {
+    local npm_bin="$1"
+    local out
+    out=$("$npm_bin" cache verify 2>&1)
+    local code=$?
+
+    if [ $code -eq 0 ]; then
+        return 0
+    fi
+    if npm_output_indicates_corruption "$out"; then
+        return 2
+    fi
+    return 1
+}
+
+# Repair a corrupted global npm by reinstalling npm@latest from the registry
+# tarball directly (npm's documented manual bootstrap) — no working npm
+# required, so it can heal an npm that cannot run `install` itself.
+# Usage: repair_npm_install "<npm_bin>" "<use_sudo:true|false>"
+# Returns: 0 on success, 1 on failure
+repair_npm_install() {
+    local npm_bin="$1"
+    local use_sudo="${2:-false}"
+
+    local gnm
+    gnm=$(npm_global_modules_dir "$npm_bin")
+    if [ -z "$gnm" ]; then
+        print_error "Could not determine npm global modules directory"
+        return 1
+    fi
+
+    local meta
+    meta=$(curl -fsSL "https://registry.npmjs.org/npm/latest" 2>/dev/null)
+    local tarball_url
+    tarball_url=$(printf '%s' "$meta" | grep -oE '"tarball":"[^"]+"' | head -1 | sed -E 's/.*"tarball":"([^"]+)".*/\1/')
+    if [ -z "$tarball_url" ]; then
+        print_error "Could not resolve npm@latest tarball URL from the registry"
+        return 1
+    fi
+
+    local tmp
+    tmp=$(mktemp -d "/tmp/npm-heal-XXXXXX") || return 1
+
+    if ! curl -fsSL "$tarball_url" -o "$tmp/npm.tgz"; then
+        print_error "Failed to download npm tarball"
+        rm -rf "$tmp"
+        return 1
+    fi
+    if ! tar -xzf "$tmp/npm.tgz" -C "$tmp" || [ ! -d "$tmp/package" ]; then
+        print_error "Failed to extract npm tarball"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    local -a sudo_pfx=()
+    [ "$use_sudo" = "true" ] && sudo_pfx=(run_with_sudo)
+
+    # Replace <gnm>/npm with the fresh, internally-consistent package, keeping
+    # the old copy aside until the move succeeds so a failure can roll back.
+    "${sudo_pfx[@]}" rm -rf "$gnm/npm.heal-old" 2>/dev/null
+    if [ -d "$gnm/npm" ] && ! "${sudo_pfx[@]}" mv "$gnm/npm" "$gnm/npm.heal-old"; then
+        print_error "Failed to move aside the broken npm install"
+        rm -rf "$tmp"
+        return 1
+    fi
+    if ! "${sudo_pfx[@]}" mv "$tmp/package" "$gnm/npm"; then
+        print_error "Failed to install the fresh npm; rolling back"
+        [ -d "$gnm/npm.heal-old" ] && "${sudo_pfx[@]}" mv "$gnm/npm.heal-old" "$gnm/npm"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    "${sudo_pfx[@]}" rm -rf "$gnm/npm.heal-old" 2>/dev/null
+    rm -rf "$tmp"
+    return 0
+}
+
+# Ensure the given npm is healthy before an npm-based snippet uses it; if the
+# known corruption is detected, offer (prompt-gated) to repair it.
+# Usage: ensure_npm_healthy [<npm_bin>] [--sudo]
+#   <npm_bin>  npm to check (default: "npm" on PATH)
+#   --sudo     use sudo for the repair writes (system /usr/local installs)
+# Honors CHECK_ONLY_MODE (never repairs), QUIET_MODE (no prompt -> declines),
+# and SYSUPDATE_NPM_AUTOHEAL=true (repairs without prompting).
+# Returns: 0 if healthy or repaired, 1 if broken and not repaired
+ensure_npm_healthy() {
+    local npm_bin="npm"
+    local use_sudo="false"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --sudo) use_sudo="true" ;;
+            *)      npm_bin="$1" ;;
+        esac
+        shift
+    done
+
+    # Nothing to check if this npm is not present
+    if ! command -v "$npm_bin" >/dev/null 2>&1 && [ ! -x "$npm_bin" ]; then
+        return 0
+    fi
+
+    probe_npm_health "$npm_bin"
+    local health=$?
+
+    if [ "$health" -eq 0 ]; then
+        return 0
+    fi
+    # Inconclusive / unrelated failure: do not claim corruption, let the
+    # caller's own npm invocation surface whatever the real error is.
+    if [ "$health" -ne 2 ]; then
+        return 0
+    fi
+
+    print_warning "Detected a corrupted npm install ($npm_bin)"
+    print_status  "Symptom: 'Class extends value ... is not a constructor or null' (mismatched dependency tree, e.g. minipass)"
+
+    if [ "${CHECK_ONLY_MODE:-false}" = "true" ]; then
+        print_status "Check-only mode - not repairing npm"
+        return 1
+    fi
+
+    if [ "${SYSUPDATE_NPM_AUTOHEAL:-false}" != "true" ]; then
+        if ! prompt_yes_no "Reinstall a clean npm@latest to repair it?"; then
+            print_status "Skipping npm repair"
+            return 1
+        fi
+    fi
+
+    print_status "Repairing npm via clean tarball reinstall..."
+    if ! repair_npm_install "$npm_bin" "$use_sudo"; then
+        print_error "Failed to repair npm"
+        return 1
+    fi
+
+    if probe_npm_health "$npm_bin"; then
+        print_success "npm repaired successfully"
+        return 0
+    fi
+
+    print_error "npm still unhealthy after repair"
+    return 1
 }
 
 #=============================================================================
