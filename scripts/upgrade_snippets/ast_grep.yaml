@@ -1,0 +1,54 @@
+# ast-grep Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-24
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-24) - Initial alpha version
+#                            - Version check via npm registry (@ast-grep/cli)
+#                            - Updates the global npm install; also refreshes a
+#                              system-wide /usr/local install via sudo when present
+#
+
+# Application identifiers
+application:
+  name: "ast-grep"
+  command: "ast-grep"
+  display_name: "ast-grep"
+  npm_package: "@ast-grep/cli"
+
+# Dependencies
+dependencies:
+  - name: "npm"
+    command: "npm"
+    help: "Install npm (Node.js) first to use ast-grep"
+
+# Messages
+messages:
+  checking_updates: "Checking ast-grep updates..."
+  install_help: |
+    Install ast-grep using one of the supported channels:
+
+    - npm: npm install -g @ast-grep/cli
+    - cargo: cargo install ast-grep --locked
+    - Homebrew: brew install ast-grep
+    - GitHub releases: https://github.com/ast-grep/ast-grep/releases
+  failed_version: "Failed to get current ast-grep version"
+  update_success: "ast-grep updated"
+
+# Version extraction
+#   The literal `ast-grep ` token abuts the capture group, so the greedy
+#   leading-`.*` in extract_version cannot steal the first version digit.
+version:
+  command: "ast-grep --version"
+  regex: 'ast-grep ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "npm"
+
+# Update commands
+#   The snippet installs `application.npm_package`@latest with the npm that
+#   owns the active binary (system npm + sudo for /usr/local installs).
+update:
+  output_lines: 10
