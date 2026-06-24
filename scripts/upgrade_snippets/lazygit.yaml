@@ -1,0 +1,60 @@
+# lazygit Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-24
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-24) - Initial alpha version
+#                            - Version check via GitHub releases (jesseduffield/lazygit)
+#                            - Installs the official Linux release tarball to the
+#                              directory of the active binary (snap installs refresh instead)
+#
+
+# Application identifiers
+application:
+  name: "lazygit"
+  command: "lazygit"
+  display_name: "lazygit"
+
+# Messages
+messages:
+  checking_updates: "Checking lazygit updates..."
+  install_help: |
+    Install lazygit using one of the supported channels:
+
+    - GitHub release tarball: https://github.com/jesseduffield/lazygit/releases/latest
+    - Snap: sudo snap install lazygit
+    - Go: go install github.com/jesseduffield/lazygit@latest
+  failed_version: "Failed to get current lazygit version"
+  failed_latest_version: "Failed to determine the latest lazygit version"
+  failed_download_url: "Failed to resolve the latest lazygit release download URL"
+  detected_snap: "Detected: lazygit installed via snap"
+  detected_binary: "Detected: lazygit installed as a standalone binary"
+  refreshing_snap: "Refreshing lazygit snap..."
+  downloading: "Downloading latest lazygit release..."
+  installing: "Installing latest lazygit binary to {path}..."
+  update_success: "lazygit updated successfully to {version}"
+
+# Version extraction
+#   `version=` abuts the capture group to avoid the greedy leading-`.*`
+#   stealing the first digit, and the `tr`/`grep` pipeline isolates the
+#   lazygit version field from the trailing `git version=` field.
+version:
+  command: "lazygit --version 2>&1 | tr ',' '\n' | grep -E '^[[:space:]]*version='"
+  regex: 'version=([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "jesseduffield"
+  github_repo: "lazygit"
+  snap_package_name: "lazygit"
+
+# Update configuration
+update:
+  method: "github_tarball"
+  output_lines: 20
+  snap_package_name: "lazygit"
+  binary_name: "lazygit"
+  default_install_dir: "/usr/local/bin"
+  temp_file: "/tmp/lazygit_update.tar.gz"
