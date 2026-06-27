@@ -156,7 +156,8 @@ check_httpinspect_ready() {
         not_installed_msg="${not_installed_msg/\{path\}/$install_dir}"
         emit_summary_event "version_check" "target" "httpinspect" "status" "not_installed" "current_version" "unknown" "latest_version" "unknown"
         print_status "$not_installed_msg"
-        show_httpinspect_install_help
+        # No install help here: the caller offers to clone+build (status 2),
+        # and only falls back to show_httpinspect_install_help if declined.
         return 2
     fi
 
@@ -394,6 +395,100 @@ httpinspect_version_check() {
     return 0
 }
 
+# Fresh install: clone the repo and build it. Mirrors the update path's rebuild
+# step (make), so a successful install leaves a runnable checkout. Returns 0 on
+# success, 1 on failure. The yeet runtime needed to *run* httpinspect is a
+# separate dependency (curl|sh installer) we do not auto-execute; we hint at it.
+install_httpinspect() {
+    local install_dir="$1"
+
+    if ! command -v git >/dev/null 2>&1; then
+        print_error "git is required to install httpinspect"
+        return 1
+    fi
+
+    local git_repo
+    git_repo=$(get_config "application.git_repo")
+    [ -n "$git_repo" ] || git_repo=$(get_config "version.git_url")
+    if [ -z "$git_repo" ]; then
+        print_error "httpinspect repository URL is not configured"
+        return 1
+    fi
+
+    local output_lines
+    output_lines=$(get_config "update.output_lines")
+
+    local parent_dir
+    parent_dir=$(dirname "$install_dir")
+    if ! mkdir -p "$parent_dir" 2>/dev/null; then
+        print_error "Failed to create directory $parent_dir"
+        return 1
+    fi
+
+    local cloning_msg
+    cloning_msg=$(get_config "messages.cloning")
+    cloning_msg="${cloning_msg/\{path\}/$install_dir}"
+    print_status "$cloning_msg"
+
+    local clone_output
+    clone_output=$(git clone "$git_repo" "$install_dir" 2>&1)
+    local clone_exit=$?
+    emit_captured_output "$clone_output" "$output_lines"
+    if [ "$clone_exit" -ne 0 ]; then
+        local clone_failed_msg
+        clone_failed_msg=$(get_config "messages.clone_failed")
+        clone_failed_msg="${clone_failed_msg/\{path\}/$install_dir}"
+        print_error "$clone_failed_msg"
+        return 1
+    fi
+
+    # Build the eBPF object + JS bundle (reuses update.rebuild_command = make).
+    if ! rebuild_httpinspect "$install_dir"; then
+        return 1
+    fi
+
+    local installed_commit
+    installed_commit=$(get_httpinspect_current_commit)
+
+    local install_success_msg
+    install_success_msg=$(get_config "messages.install_success")
+    print_success "$install_success_msg"
+
+    if [ -n "$installed_commit" ]; then
+        local commit_msg
+        commit_msg=$(get_config "messages.commit_info")
+        commit_msg="${commit_msg/\{commit\}/$installed_commit}"
+        print_status "$commit_msg"
+    fi
+
+    emit_summary_event "version_check" "target" "httpinspect" "status" "up_to_date" "current_version" "${installed_commit:-unknown}" "latest_version" "${installed_commit:-unknown}"
+
+    # httpinspect runs through the yeet runtime; remind the user if it is absent.
+    if ! command -v yeet >/dev/null 2>&1; then
+        local yeet_hint_msg
+        yeet_hint_msg=$(get_config "messages.yeet_runtime_hint")
+        yeet_hint_msg="${yeet_hint_msg/\{path\}/$install_dir}"
+        [ -n "$yeet_hint_msg" ] && print_status "$yeet_hint_msg"
+    fi
+
+    return 0
+}
+
+# Offer to install httpinspect when it is missing. Declining (or quiet/check-only
+# mode, where prompt_yes_no defaults to no) falls back to the manual install help.
+offer_httpinspect_install() {
+    local install_dir
+    install_dir=$(get_httpinspect_install_dir)
+
+    if ! prompt_yes_no "Install httpinspect now?"; then
+        print_status "$(get_config "messages.skipping_install")"
+        show_httpinspect_install_help
+        return 0
+    fi
+
+    install_httpinspect "$install_dir"
+}
+
 update_httpinspect() {
     httpinspect_version_check
     local check_status=$?
@@ -401,7 +496,13 @@ update_httpinspect() {
     case "$check_status" in
         0)
             ;;
-        2|3)
+        2)
+            # Not installed: offer to clone + build instead of only skipping.
+            offer_httpinspect_install
+            ask_continue
+            return 0
+            ;;
+        3)
             ask_continue
             return 0
             ;;
