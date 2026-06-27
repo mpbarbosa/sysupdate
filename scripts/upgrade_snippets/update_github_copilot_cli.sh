@@ -64,7 +64,11 @@ update_github_copilot_cli() {
     success_msg=$(get_config "messages.update_success")
     local app_name
     app_name=$(get_config "application.name")
-    
+
+    # Repair the PATH npm first if it is corrupted (mismatched dependency
+    # tree), else the install below crashes loading cacache.
+    ensure_npm_healthy "npm" || true
+
     if ! handle_update_prompt "$APP_DISPLAY_NAME" "$VERSION_STATUS" \
         "$update_cmd 2>&1 | tail -$output_lines && \
          print_success '$success_msg' && \
@@ -77,9 +81,13 @@ update_github_copilot_cli() {
     local system_npm="/usr/local/bin/npm"
     local system_copilot="/usr/local/bin/copilot"
     if [ -f "$system_copilot" ] && [ -f "$system_npm" ]; then
-        print_status "Updating system-wide GitHub Copilot CLI installation ($system_copilot)..."
-        sudo "$system_npm" install -g --force @github/copilot@latest 2>&1 | tail -"$output_lines"
-        print_success "System-wide $APP_DISPLAY_NAME updated"
+        if ensure_npm_healthy "$system_npm" --sudo; then
+            print_status "Updating system-wide GitHub Copilot CLI installation ($system_copilot)..."
+            run_with_sudo "$system_npm" install -g --force @github/copilot@latest 2>&1 | tail -"$output_lines"
+            print_success "System-wide $APP_DISPLAY_NAME updated"
+        else
+            print_warning "System npm unhealthy; skipped system-wide $APP_DISPLAY_NAME update"
+        fi
     fi
 }
 

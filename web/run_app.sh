@@ -65,7 +65,26 @@ ensure_process_running() {
 
 trap cleanup EXIT INT TERM
 
+# Refuse to run as root. A root build writes root-owned artifacts into dist/,
+# which a later non-root build cannot clear — Vite then fails with EACCES while
+# emptying the output dir. Run as your normal user instead.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Refusing to run as root: it would create root-owned files in dist/ that later non-root builds cannot remove." >&2
+    echo "Re-run as your normal user (no sudo): ./web/run_app.sh" >&2
+    exit 1
+fi
+
 cd "$SCRIPT_DIR"
+
+# Clear any previous build output up front so we can surface a clear, actionable
+# message if it is unwritable (e.g. root-owned from an earlier sudo run) instead
+# of leaving Vite to fail later with a cryptic EACCES stack trace.
+if [ -d dist ] && ! rm -rf dist 2>/dev/null; then
+    echo "Cannot remove existing build output at $SCRIPT_DIR/dist" >&2
+    echo "It is likely root-owned from a previous sudo run. Remove it with:" >&2
+    echo "    sudo rm -rf \"$SCRIPT_DIR/dist\"" >&2
+    exit 1
+fi
 
 echo "Building web app..."
 npm run build

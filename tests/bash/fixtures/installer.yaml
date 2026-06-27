@@ -1,0 +1,12 @@
+application:
+  name: "testinstaller"
+  display_name: "Test Installer App"
+
+messages:
+  downloading_installer: "Downloading installer..."
+  update_success: "Test installer app updated"
+
+update:
+  installer_url: "https://example.com/installer.sh"
+  output_lines: 20
+  method: "wget_sudo_installer"

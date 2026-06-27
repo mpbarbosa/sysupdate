@@ -51,10 +51,20 @@ perform_ast_grep_update() {
     local update_output
     local update_exit_code
     if [[ "$resolved" == /usr/local/* ]] && [ -x "/usr/local/bin/npm" ]; then
+        # Repair the system npm first if it is corrupted, else the install
+        # below would crash with "Class extends value ... not a constructor".
+        if ! ensure_npm_healthy "/usr/local/bin/npm" --sudo; then
+            print_error "System npm is unhealthy; cannot update ast-grep"
+            return 1
+        fi
         print_status "Updating system-wide ast-grep via /usr/local/bin/npm..."
         update_output=$(run_with_sudo /usr/local/bin/npm install -g "${npm_package}@latest" 2>&1)
         update_exit_code=$?
     else
+        if ! ensure_npm_healthy "npm"; then
+            print_error "npm is unhealthy; cannot update ast-grep"
+            return 1
+        fi
         update_output=$(npm install -g "${npm_package}@latest" 2>&1)
         update_exit_code=$?
     fi

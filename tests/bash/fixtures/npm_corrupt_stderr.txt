@@ -1,0 +1,6 @@
+npm error code 1
+npm error path /usr/local/lib/node_modules/npm/node_modules/minipass-flush
+npm error TypeError: Class extends value undefined is not a constructor or null
+npm error     at Object.<anonymous> (/usr/local/lib/node_modules/npm/node_modules/minipass-flush/index.js:5:21)
+npm error     at Object.<anonymous> (/usr/local/lib/node_modules/npm/node_modules/cacache/lib/content/write.js:10:15)
+npm error A complete log of this run can be found in: /root/.npm/_logs/2026-06-24T11_33_14_395Z-debug-0.log

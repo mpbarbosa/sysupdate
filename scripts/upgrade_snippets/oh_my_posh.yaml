@@ -24,6 +24,7 @@ messages:
     Install Oh My Posh with the official installer:
       curl -s https://ohmyposh.dev/install.sh | bash -s
   failed_version: "Failed to get current Oh My Posh version"
+  downloading_installer: "Downloading Oh My Posh installer from https://ohmyposh.dev/install.sh"
   update_success: "Oh My Posh updated"
 
 version:
@@ -37,5 +38,11 @@ version:
   github_repo: "oh-my-posh"
 
 update:
-  command: "oh-my-posh upgrade"
+  # Update via the official install script, run with bash (it uses bashisms) and
+  # no sudo (it targets the user-writable ~/.local/bin). The built-in
+  # `oh-my-posh upgrade` is unreliable: it exits 0 without acting on major
+  # version jumps, and `upgrade --force` is a no-op for a manual install — both
+  # produced a phantom "updated" with no version change.
+  installer_url: "https://ohmyposh.dev/install.sh"
+  method: "curl_bash_installer"
   output_lines: 20

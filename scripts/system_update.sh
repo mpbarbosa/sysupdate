@@ -63,6 +63,22 @@ source "$LIB_DIR/apt_manager.sh"
 source "$LIB_DIR/pacman_manager.sh"
 source "$LIB_DIR/dpkg_manager.sh"
 
+# Refuse to run as root. This updater is designed to run as a normal user and
+# escalate per-command via run_with_sudo. Running the whole script as root makes
+# every HOME-relative path resolve under /root — ~/.local/bin tool detection,
+# the ~/.local/state/sysupdate run history, and per-user app updates all break,
+# and it can leave root-owned files behind. Set SYSUPDATE_ALLOW_ROOT=1 to
+# override (e.g. a deliberate root-only environment).
+if [ "$(id -u)" -eq 0 ] && [ "${SYSUPDATE_ALLOW_ROOT:-}" != "1" ]; then
+    print_error "Refusing to run as root: this updater escalates per-command via sudo and expects a normal user."
+    print_error "Re-run as your user (no sudo), or set SYSUPDATE_ALLOW_ROOT=1 to override."
+    exit 1
+fi
+
+# Make sure per-user install dirs (e.g. ~/.local/bin for the Claude Code native
+# installer) are on PATH before any snippet runs its `command -v` checks.
+ensure_user_paths
+
 #=============================================================================
 # GLOBAL FLAGS AND CONFIGURATION
 #=============================================================================
