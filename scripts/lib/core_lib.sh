@@ -386,8 +386,36 @@ prompt_input() {
     fi
 }
 
+# Ensure standard per-user binary directories are on PATH.
+# Native installers (Claude Code's install.sh, pipx, pip --user, etc.) place
+# executables under XDG/user-local bin dirs that a non-login or sanitized-PATH
+# invocation of this script may omit. Without them, `command -v <tool>` reports
+# an installed tool as missing — e.g. ~/.local/bin/claude looking "not
+# installed". Prepend the well-known dirs idempotently so detection matches what
+# an interactive shell sees. Only directories that exist are added.
+ensure_user_paths() {
+    local dir
+    for dir in "$HOME/.local/bin" "$HOME/bin"; do
+        [ -d "$dir" ] || continue
+        case ":$PATH:" in
+            *":$dir:"*) ;;            # already present — skip
+            *) PATH="$dir:$PATH" ;;
+        esac
+    done
+    export PATH
+}
+
 sudo_credentials_cached() {
     sudo -n true >/dev/null 2>&1
+}
+
+# Returns 0 when a sudo command can succeed without a manual password prompt
+# being impossible: either credentials are already cached, or there is a TTY on
+# stdin to prompt against. In non-interactive contexts (e.g. the web backend)
+# with no cached credentials this returns 1, letting callers skip work early
+# instead of failing after side effects such as downloads.
+sudo_can_run() {
+    sudo_credentials_cached || [ -t 0 ]
 }
 
 emit_sudo_required_event() {
@@ -415,7 +443,7 @@ run_with_sudo() {
 
     emit_sudo_required_event "$command_preview" "$cached_credentials"
 
-    if [ "$cached_credentials" != "true" ] && ! [ -t 0 ]; then
+    if ! sudo_can_run; then
         print_error "Sudo credentials required for command: $command_preview"
         print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
         return 1

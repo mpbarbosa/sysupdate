@@ -28,39 +28,20 @@ source "$LIB_DIR/upgrade_utils.sh"
 # shellcheck disable=SC2034
 CONFIG_FILE="$SCRIPT_DIR/oh_my_posh.yaml"
 
-perform_oh_my_posh_update() {
-    local update_cmd
-    update_cmd=$(get_config "update.command")
-    local output_lines
-    output_lines=$(get_config "update.output_lines")
-    local success_msg
-    success_msg=$(get_config "messages.update_success")
-    local app_name
-    app_name=$(get_config "application.name")
-    local update_output
-
-    if ! update_output=$(eval "$update_cmd" 2>&1); then
-        [ -n "$update_output" ] && echo "$update_output" | tail -"${output_lines:-20}"
-        print_error "Failed to update $APP_DISPLAY_NAME"
-        return 1
-    fi
-
-    [ -n "$update_output" ] && echo "$update_output" | tail -"${output_lines:-20}"
-    print_success "$success_msg"
-    show_installation_info "$app_name" "$APP_DISPLAY_NAME"
-    return 0
-}
-
+# Oh My Posh updates via its official install script (config-driven). We do NOT
+# use the built-in `oh-my-posh upgrade`: it exits 0 without acting on major
+# version jumps (e.g. "use --force"), and even `upgrade --force` is a no-op for a
+# manual ~/.local/bin install — so the previous command-based snippet reported a
+# phantom "updated" while the binary never changed. The installer reliably
+# fetches the latest release and replaces the binary in place; the shared
+# handler then verifies the installed version actually advanced.
 update_oh_my_posh() {
     if ! config_driven_version_check; then
         ask_continue
         return 0
     fi
 
-    if ! handle_update_prompt "$APP_DISPLAY_NAME" "$VERSION_STATUS" "perform_oh_my_posh_update"; then
-        ask_continue
-        return 1
-    fi
+    handle_installer_script_update
 }
 
 update_oh_my_posh

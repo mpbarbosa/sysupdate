@@ -1,0 +1,83 @@
+# httpinspect Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-06-24
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-06-24) - Initial alpha version
+#                            - Git commit-based update detection (no upstream
+#                              releases or tags exist)
+#                            - Updates via fast-forward git pull, then rebuilds
+#                              the eBPF object + JS bundle with `make`
+#
+# httpinspect (https://github.com/yeet-src/httpinspect) is an eBPF + JavaScript
+# source app run through the `yeet` runtime (`yeet run .`). It ships no binaries,
+# releases, or tags, so "version" is the git commit of the local checkout and the
+# update is a `git pull` of the tracked branch followed by a `make` rebuild.
+
+application:
+  name: "httpinspect"
+  display_name: "httpinspect"
+  # Honors $HTTPINSPECT_DIR; the snippet falls back to this default when unset.
+  installation_dir: "${HTTPINSPECT_DIR:-${HOME}/.local/share/httpinspect}"
+  git_repo: "https://github.com/yeet-src/httpinspect.git"
+
+# Tools the update workflow shells out to.
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "Install git to track and update the httpinspect checkout"
+  - name: "make"
+    command: "make"
+    help: "Install make to rebuild the eBPF object and JS bundle after pulling"
+
+version:
+  type: "git_commit"
+  source: "git"
+  git_url: "https://github.com/yeet-src/httpinspect.git"
+  installation_path: "${HTTPINSPECT_DIR:-${HOME}/.local/share/httpinspect}"
+
+update:
+  method: "git_pull"
+  branch: "master"
+  # Rebuild after pulling; the Makefile fetches its own deps. Empty disables it.
+  rebuild_command: "make"
+  output_lines: 30
+
+messages:
+  checking_updates: "Checking httpinspect updates..."
+  install_help: |
+    httpinspect is a source app run through the yeet runtime; clone it, then
+    point this snippet at the checkout with $HTTPINSPECT_DIR (or use the default
+    {path}):
+
+      git clone https://github.com/yeet-src/httpinspect.git {path}
+      cd {path}
+      curl -fsSL https://yeet.cx | sh   # installs the `yeet` runtime
+      make                              # build the eBPF object + JS bundle
+      yeet run .                        # launch the live HTTP dashboard
+
+    Requires Linux with BTF support and TCX (kernel 6.6+).
+    Reference: https://github.com/yeet-src/httpinspect
+  failed_get_version: "Failed to get current httpinspect commit"
+  unsupported_kernel: "httpinspect requires Linux {min_version}+ for the TCX eBPF attach point, but the running kernel is {kernel}; skipping update"
+  unknown_kernel: "Could not determine the kernel version (got '{kernel}'); httpinspect requires Linux {min_version}+ with TCX; skipping update"
+  missing_btf: "httpinspect requires kernel BTF support, but {path} was not found; rebuild the kernel with CONFIG_DEBUG_INFO_BTF=y to enable it; skipping update"
+  unsupported_platform_hint: "Set HTTPINSPECT_SKIP_KERNEL_CHECK=1 to update the source anyway (e.g. to run on a different kernel after reboot)."
+  not_installed: "httpinspect is not installed at {path}; skipping update"
+  not_git_repo: "httpinspect directory exists but is not a Git repository; skipping update"
+  empty_git_repo: "httpinspect Git checkout has no commits yet; skipping update"
+  missing_git_remote: "httpinspect Git checkout has no origin remote configured; skipping update"
+  updating: "Updating httpinspect..."
+  fetch_failed: "Failed to fetch httpinspect updates from origin"
+  pulling_updates: "Pulling latest httpinspect changes..."
+  pull_failed: "Failed to pull httpinspect updates"
+  rebuilding: "Rebuilding httpinspect (eBPF object + JS bundle)..."
+  rebuild_failed: "git pull succeeded but the httpinspect rebuild failed; run 'make' manually in {path}"
+  update_success: "httpinspect updated successfully!"
+  already_updated: "httpinspect is already up to date"
+  commit_info: "Current commit: {commit}"
+  remote_commit_info: "Remote commit: {commit}"

@@ -125,3 +125,74 @@ setup() {
     [[ "$output" == *"ID"* ]]
     [[ "$output" == *"NAME"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# perform_configured_installer_script_update (sudo pre-flight)
+#
+# A wget_sudo_installer needs root. In a non-interactive context with no cached
+# credentials (bats stdin is not a TTY) it must bail BEFORE downloading rather
+# than fetching the installer and then failing on sudo.
+# ---------------------------------------------------------------------------
+
+@test "installer update: bails before download when sudo unavailable" {
+    export CONFIG_FILE="$FIXTURES_DIR/installer.yaml"
+    export APP_DISPLAY_NAME="Test Installer App"
+    # No cached creds; never reach the real sudo invocation.
+    sudo() { return 1; }
+    # Sentinel: wget must NOT be called on the pre-flight bail path.
+    export WGET_MARKER="$BATS_TEST_TMPDIR/wget-was-called"
+    wget() { : > "$WGET_MARKER"; return 0; }
+    export -f sudo wget
+
+    run perform_configured_installer_script_update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Sudo credentials required"* ]]
+    [ ! -f "$WGET_MARKER" ]
+}
+
+@test "installer update: proceeds to download when sudo credentials cached" {
+    export CONFIG_FILE="$FIXTURES_DIR/installer.yaml"
+    export APP_DISPLAY_NAME="Test Installer App"
+    # `sudo -n true` succeeds -> creds cached; real `sudo sh <script>` is a no-op.
+    sudo() { if [ "$1" = "-n" ]; then return 0; fi; return 0; }
+    export WGET_MARKER="$BATS_TEST_TMPDIR/wget-was-called"
+    wget() { : > "$WGET_MARKER"; return 0; }
+    # Stop after the install step so the test doesn't probe a real version.
+    verify_configured_update_result() { return 0; }
+    export -f sudo wget verify_configured_update_result
+
+    run perform_configured_installer_script_update
+    [ "$status" -eq 0 ]
+    [ -f "$WGET_MARKER" ]
+}
+
+# ---------------------------------------------------------------------------
+# perform_configured_installer_script_update (curl_bash_installer method)
+#
+# Some official installers (e.g. Oh My Posh) are bash scripts targeting a
+# user-writable dir. This method must download via curl, run with bash (NOT sh),
+# and never invoke sudo.
+# ---------------------------------------------------------------------------
+
+@test "curl_bash_installer: downloads with curl and runs with bash, no sudo" {
+    export CONFIG_FILE="$FIXTURES_DIR/installer_bash.yaml"
+    export APP_DISPLAY_NAME="Test Bash Installer App"
+    export CURL_MARKER="$BATS_TEST_TMPDIR/curl-was-called"
+    export BASH_MARKER="$BATS_TEST_TMPDIR/bash-was-called"
+    export SH_MARKER="$BATS_TEST_TMPDIR/sh-was-called"
+    export SUDO_MARKER="$BATS_TEST_TMPDIR/sudo-was-called"
+    # curl writes the requested output file ($4 = path after -o) so mktemp's file exists.
+    curl() { : > "$CURL_MARKER"; [ -n "$4" ] && : > "$4"; return 0; }
+    bash() { : > "$BASH_MARKER"; return 0; }
+    sh()   { : > "$SH_MARKER"; return 0; }
+    sudo() { : > "$SUDO_MARKER"; return 0; }
+    verify_configured_update_result() { return 0; }
+    export -f curl bash sh sudo verify_configured_update_result
+
+    run perform_configured_installer_script_update
+    [ "$status" -eq 0 ]
+    [ -f "$CURL_MARKER" ]      # downloaded via curl
+    [ -f "$BASH_MARKER" ]      # ran with bash
+    [ ! -f "$SH_MARKER" ]      # NOT run with sh
+    [ ! -f "$SUDO_MARKER" ]    # no sudo
+}

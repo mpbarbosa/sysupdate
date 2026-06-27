@@ -1,0 +1,12 @@
+application:
+  name: "testbashinstaller"
+  display_name: "Test Bash Installer App"
+
+messages:
+  downloading_installer: "Downloading installer..."
+  update_success: "Test bash installer app updated"
+
+update:
+  installer_url: "https://example.com/install.sh"
+  output_lines: 20
+  method: "curl_bash_installer"

@@ -22,6 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
 source "$LIB_DIR/upgrade_utils.sh"
 
+# shellcheck disable=SC2034
 CONFIG_FILE="$SCRIPT_DIR/claude_cli.yaml"
 
 perform_claude_cli_update() {
@@ -31,8 +32,6 @@ perform_claude_cli_update() {
     output_lines=$(get_config "update.output_lines")
     local success_msg
     success_msg=$(get_config "messages.update_success")
-    local app_name
-    app_name=$(get_config "application.name")
     local update_output
 
     if ! update_output=$(eval "$update_cmd" 2>&1); then
@@ -42,9 +41,13 @@ perform_claude_cli_update() {
     fi
 
     [ -n "$update_output" ] && echo "$update_output" | tail -"${output_lines:-20}"
-    print_success "$success_msg"
-    show_installation_info "$app_name" "$APP_DISPLAY_NAME"
-    return 0
+
+    # `claude update` can exit 0 without actually advancing the version (e.g. a
+    # managed/no-op install), so the exit code alone cannot confirm success.
+    # Verify the installed version actually reached the latest release; this
+    # prints "Verified version: X", emits the summary event, and reports an
+    # honest failure if the binary did not change.
+    verify_configured_update_result "$CURRENT_VERSION" "$LATEST_VERSION" "$success_msg"
 }
 
 update_claude_cli() {
