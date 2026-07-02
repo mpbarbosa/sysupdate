@@ -895,6 +895,18 @@ perform_configured_deb_package_update() {
         return 1
     fi
 
+    # Pre-flight: dpkg -i (and the apt-get -f dependency repair) need root. In a
+    # non-interactive context (e.g. the web backend) with no cached sudo
+    # credentials this cannot succeed, so bail before downloading the package
+    # rather than wasting a large download and erroring after the fact. Emitting
+    # sudo.required lets the UI prompt for re-authentication.
+    if ! sudo_can_run; then
+        emit_sudo_required_event "dpkg -i <package for ${APP_DISPLAY_NAME:-this update}>" "false"
+        print_error "Sudo credentials required to install ${APP_DISPLAY_NAME:-this update}"
+        print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
+        return 1
+    fi
+
     if [ -z "$temp_file" ]; then
         temp_file=$(mktemp "/tmp/sysupdate-package-XXXXXX.deb") || return 1
     fi

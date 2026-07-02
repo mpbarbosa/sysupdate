@@ -141,11 +141,17 @@ check_oh_my_zsh_ready() {
     return 0
 }
 
+# Return a fixed 8-char commit prefix so it compares cleanly with the remote
+# prefix in get_oh_my_zsh_remote_commit. `git rev-parse --short` picks a variable
+# (often 7-char) length, which would never equal the 8-char remote prefix even at
+# the same commit, causing a false "update available" every run.
 get_oh_my_zsh_current_commit() {
     local install_dir
     install_dir=$(get_oh_my_zsh_install_dir)
 
-    git -C "$install_dir" rev-parse --short HEAD 2>/dev/null
+    local full_sha
+    full_sha=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null) || return 1
+    printf '%.8s\n' "$full_sha"
 }
 
 get_oh_my_zsh_remote_commit() {

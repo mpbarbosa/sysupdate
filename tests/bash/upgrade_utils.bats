@@ -174,6 +174,50 @@ setup() {
 # and never invoke sudo.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# perform_configured_deb_package_update (sudo pre-flight)
+#
+# Installing a .deb needs root (dpkg -i + apt-get -f). In a non-interactive
+# context with no cached credentials it must bail BEFORE downloading the
+# package rather than fetching a large .deb and then failing on sudo.
+# ---------------------------------------------------------------------------
+
+@test "deb update: bails before download when sudo unavailable" {
+    export CONFIG_FILE="$FIXTURES_DIR/deb_package.yaml"
+    export APP_DISPLAY_NAME="Test Deb App"
+    # No cached creds; never reach the real sudo invocation.
+    sudo() { return 1; }
+    # Sentinels: neither curl (URL resolve) nor wget (download) must run.
+    export CURL_MARKER="$BATS_TEST_TMPDIR/curl-was-called"
+    export WGET_MARKER="$BATS_TEST_TMPDIR/wget-was-called"
+    curl() { : > "$CURL_MARKER"; return 0; }
+    wget() { : > "$WGET_MARKER"; return 0; }
+    export -f sudo curl wget
+
+    run perform_configured_deb_package_update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Sudo credentials required"* ]]
+    [ ! -f "$CURL_MARKER" ]
+    [ ! -f "$WGET_MARKER" ]
+}
+
+@test "deb update: proceeds to download when sudo credentials cached" {
+    export CONFIG_FILE="$FIXTURES_DIR/deb_package.yaml"
+    export APP_DISPLAY_NAME="Test Deb App"
+    # `sudo -n true` succeeds -> creds cached; real sudo dpkg/apt-get are no-ops.
+    sudo() { if [ "$1" = "-n" ]; then return 0; fi; return 0; }
+    export WGET_MARKER="$BATS_TEST_TMPDIR/wget-was-called"
+    # curl resolves the effective URL; wget downloads the package.
+    curl() { echo "https://example.com/latest.deb"; return 0; }
+    wget() { : > "$WGET_MARKER"; return 0; }
+    verify_configured_update_result() { return 0; }
+    export -f sudo curl wget verify_configured_update_result
+
+    run perform_configured_deb_package_update
+    [ "$status" -eq 0 ]
+    [ -f "$WGET_MARKER" ]
+}
+
 @test "curl_bash_installer: downloads with curl and runs with bash, no sudo" {
     export CONFIG_FILE="$FIXTURES_DIR/installer_bash.yaml"
     export APP_DISPLAY_NAME="Test Bash Installer App"

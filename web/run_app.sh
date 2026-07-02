@@ -2,12 +2,68 @@
 
 set -euo pipefail
 
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOST="${SYSUPDATE_WEB_APP_HOST:-127.0.0.1}"
 APP_PORT="${SYSUPDATE_WEB_APP_PORT:-5173}"
 APP_URL="${SYSUPDATE_WEB_APP_URL:-http://${APP_HOST}:${APP_PORT}}"
+INTERACTIVE_MODE=false
 BACKEND_PID=""
 DEV_PID=""
+SUDO_KEEPALIVE_PID=""
+
+usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+Build the sysupdate web dashboard, start the Node.js backend bridge and the
+Vite dev server, wait for the app to become ready, then open it in a browser.
+Runs in the foreground until the dev server exits or you press Ctrl+C, which
+shuts down both child processes.
+
+Options:
+    -i, --interactive   Authenticate sudo up front and keep the credentials
+                        alive for the whole session, so package updates
+                        triggered from the dashboard (which the backend runs
+                        without a TTY) can install without failing on sudo.
+    -h, --help          Show this help message and exit
+
+Environment variables:
+    SYSUPDATE_WEB_APP_HOST   Host for the Vite dev server (default: 127.0.0.1)
+    SYSUPDATE_WEB_APP_PORT   Port for the Vite dev server (default: 5173)
+    SYSUPDATE_WEB_APP_URL    Full URL to wait on and open
+                             (default: http://\${APP_HOST}:\${APP_PORT})
+
+Notes:
+    • Must NOT be run as root — a root build writes root-owned files into
+      dist/ that later non-root builds cannot remove.
+    • Backend bridge configuration (SYSUPDATE_WEB_HOST/PORT, SYSUPDATE_LOG_FILE,
+      etc.) is read by the backend itself; see web/CLAUDE.md.
+
+Examples:
+    ./$SCRIPT_NAME                                  # Build and launch with defaults
+    ./$SCRIPT_NAME -i                               # Pre-authenticate sudo for dashboard updates
+    SYSUPDATE_WEB_APP_PORT=3000 ./$SCRIPT_NAME      # Serve the dev server on port 3000
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i|--interactive)
+            INTERACTIVE_MODE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
 
 cleanup() {
     if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
@@ -19,6 +75,28 @@ cleanup() {
         kill "$DEV_PID"
         wait "$DEV_PID" 2>/dev/null || true
     fi
+
+    if [ -n "$SUDO_KEEPALIVE_PID" ] && kill -0 "$SUDO_KEEPALIVE_PID" 2>/dev/null; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    fi
+}
+
+# Authenticate sudo once (prompting on the controlling terminal) and refresh the
+# cached credentials in the background so they never expire while the app runs.
+# This lets the backend's non-interactive child CLI run sudo commands without a
+# TTY. The keep-alive subshell exits on its own if this script dies.
+start_sudo_keepalive() {
+    echo "Interactive mode: authenticating sudo so dashboard-triggered updates can install packages..."
+    if ! sudo -v; then
+        echo "sudo authentication failed; updates requiring root will not be able to install." >&2
+        exit 1
+    fi
+
+    ( while kill -0 "$$" 2>/dev/null; do
+          sudo -n true 2>/dev/null || exit
+          sleep 50
+      done ) &
+    SUDO_KEEPALIVE_PID=$!
 }
 
 wait_for_url() {
@@ -84,6 +162,10 @@ if [ -d dist ] && ! rm -rf dist 2>/dev/null; then
     echo "It is likely root-owned from a previous sudo run. Remove it with:" >&2
     echo "    sudo rm -rf \"$SCRIPT_DIR/dist\"" >&2
     exit 1
+fi
+
+if [ "$INTERACTIVE_MODE" = true ]; then
+    start_sudo_keepalive
 fi
 
 echo "Building web app..."

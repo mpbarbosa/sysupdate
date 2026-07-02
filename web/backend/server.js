@@ -521,15 +521,25 @@ const websocketServer = new WebSocketServer({ server, path: '/ws' });
 
 websocketServer.on('connection', (socket) => {
   clients.add(socket);
-  socket.send(
-    JSON.stringify({
-      type: 'connected',
-      payload: {
-        backend: 'sysupdate-local-bridge',
-        run: getRunSnapshot(),
-      },
-    }),
-  );
+
+  // A ws socket emitting 'error' with no listener throws and crashes the bridge.
+  // The common trigger is benign: React StrictMode opens then immediately closes
+  // the socket in dev, so the frame below can hit a closed pipe (EPIPE/ECONNRESET).
+  socket.on('error', () => {
+    clients.delete(socket);
+  });
+
+  if (socket.readyState === socket.OPEN) {
+    socket.send(
+      JSON.stringify({
+        type: 'connected',
+        payload: {
+          backend: 'sysupdate-local-bridge',
+          run: getRunSnapshot(),
+        },
+      }),
+    );
+  }
 
   socket.on('close', () => {
     clients.delete(socket);

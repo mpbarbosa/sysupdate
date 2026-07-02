@@ -1,0 +1,14 @@
+application:
+  name: "testdeb"
+  display_name: "Test Deb App"
+
+messages:
+  downloading: "Downloading {url}..."
+  installing: "Installing..."
+  update_success: "Test deb app updated"
+  failed_download_url: "Failed to resolve download URL"
+
+update:
+  redirect_url: "https://example.com/latest.deb"
+  output_lines: 20
+  fix_dependencies: "apt-get install -f -y"

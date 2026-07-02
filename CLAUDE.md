@@ -22,6 +22,8 @@ package managers and standalone tools. Everything lives under `scripts/`.
 ./scripts/system_update.sh --list-detailed
 ./scripts/system_update.sh --list-snippets         # list available upgrade_snippets with their IDs
 ./scripts/system_update.sh --snippet <id> [-q]     # run a single upgrade snippet by SNIPPET_ID
+./scripts/system_update.sh --check-only             # read-only update discovery (no changes made)
+./scripts/system_update.sh --json-events            # emit JSONL events to stderr (machine-readable)
 
 # Syntax-check a script after editing
 bash -n scripts/system_update.sh
@@ -34,8 +36,21 @@ QUIET_MODE=true
 check_updates_available
 ```
 
-There is no automated test suite; validation is `bash -n` / `shellcheck` plus manual sourcing of
-modules as shown above.
+### Tests
+
+Validation for the Bash core is `bash -n` / `shellcheck` plus the suites under `tests/` (see
+`tests/CLAUDE.md`). CI runs these via `.github/workflows/` (`ci-bash.yml`, `ci-integration.yml`,
+`ci-web.yml`).
+
+```bash
+bats tests/bash/                                    # unit: core_lib, upgrade_utils, npm health
+bats tests/integration/                             # CLI seam + JSON event contract (uses fixture snippets)
+node --test tests/backend/server.test.mjs           # backend bridge (uses stub_script.sh)
+bats tests/bash/core_lib.bats                        # run a single BATS file
+```
+
+Integration/backend tests isolate from the real system via `SYSUPDATE_SNIPPETS_DIR` and
+`SYSUPDATE_SCRIPT_PATH` env overrides pointing at fixtures — never the real snippets/script.
 
 Engineering guides for this repo (when to use each one is in the index below):
 
@@ -106,7 +121,37 @@ When adding a new snippet: create `update_<name>.sh` with `SNIPPET_ID`/`SNIPPET_
 source `lib/upgrade_utils.sh`, and (if config-driven) add a matching `<name>.yaml`. No changes to
 `system_update.sh` are needed — snippets are auto-discovered.
 
+### Machine-readable event contract (`emit_event` in `core_lib.sh`)
+
+`--json-events` (or `SYSUPDATE_JSON_EVENTS=true`) makes the CLI emit one JSON object per line **to
+stderr**, while normal human output stays on stdout. This stream is a first-class, stable contract:
+the web backend bridge and (future) QuickShell widget consume it rather than re-implementing update
+logic. Treat schema changes as breaking.
+
+- `emit_event <type> <key> <value> …` writes a sequenced JSON line; helpers `emit_summary_event`
+  (`summary.updates`) and the `terminal.line` / `log.entry` / `prompt.requested` / `prompt.resolved`
+  / `sudo.required` event types build on it. `enable_json_events` assigns a `SYSUPDATE_RUN_ID`.
+- Run history is appended as JSONL to `SYSUPDATE_LOG_FILE`
+  (default `~/.local/state/sysupdate/run-history.jsonl`, under `SYSUPDATE_STATE_DIR`).
+- The integration suite (`tests/integration/`) validates this schema — update those tests when
+  changing event shapes; see `docs/guides/OBSERVABILITY_GUIDE.md`.
+
 ### Other entry points
 
 - `scripts/system_summary.sh` — runs `fastfetch` for a system info summary; invoked automatically
   by `system_update.sh -f`.
+
+## Repository layout beyond the CLI
+
+This repo spans multiple bounded contexts; `CONTEXT-MAP.md` is the authoritative map. The Bash CLI
+in `scripts/` is **the** implemented product — the two front-ends are parallel experiments that may
+be abandoned, and both are *clients* of the CLI's JSON event contract:
+
+- `web/` — React 19 + Vite + Tailwind v4 "Cyber-Terminal HUD" dashboard plus a Node.js bridge
+  (`web/backend/server.js`) that spawns `system_update.sh --json-events` and relays events over
+  WebSocket. Has its own tooling and tests (`vitest`, `tsc --noEmit`, `eslint`). See `web/CLAUDE.md`.
+- `quickshell/` — Qt Quick/QML desktop-shell widget (design stage). See `quickshell/DESIGN.md`.
+
+Per-directory `CLAUDE.md` files (`web/`, `web/backend/`, `web/src/`, `tests/`,
+`scripts/upgrade_snippets/`) hold the local rules for each area — read the nearest one before
+editing there.
