@@ -51,6 +51,56 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
+# select_highest_semver_tag (git ls-remote fallback tag parsing)
+#
+# The anonymous GitHub REST API is rate-limited during multi-snippet scans, so
+# `source: github` snippets fall back to `git ls-remote --tags`. Repos with a
+# mixed-prefix tag namespace must not leak a non-semver string as "latest".
+# ---------------------------------------------------------------------------
+
+@test "select_highest_semver_tag: mixed-prefix namespace picks highest bare semver" {
+    # Squirreljetpack/matchmaker-style refs: per-package prefixes plus bare tags.
+    input=$'abc123\trefs/tags/matchmaker-partial-v0.0.30
+def456\trefs/tags/matchmaker-cli-v0.0.32
+789abc\trefs/tags/matchmaker-lib-v0.0.28
+012def\trefs/tags/v0.0.5
+345678\trefs/tags/v0.1.3'
+    run select_highest_semver_tag <<< "$input"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0.1.3" ]
+}
+
+@test "select_highest_semver_tag: never returns a prefixed non-semver string" {
+    input=$'abc123\trefs/tags/matchmaker-partial-v0.0.30
+def456\trefs/tags/matchmaker-cli-v0.0.32'
+    run select_highest_semver_tag <<< "$input"
+    [ "$output" = "0.0.32" ]
+    [[ "$output" != *matchmaker* ]]
+}
+
+@test "select_highest_semver_tag: strips leading v and dereference suffix" {
+    input=$'abc123\trefs/tags/v1.2.3
+def456\trefs/tags/v1.2.3^{}
+789abc\trefs/tags/v1.10.0'
+    run select_highest_semver_tag <<< "$input"
+    [ "$output" = "1.10.0" ]
+}
+
+@test "select_highest_semver_tag: discards non-version tags" {
+    input=$'abc123\trefs/tags/nightly
+def456\trefs/tags/latest
+789abc\trefs/tags/release-2024
+012def\trefs/tags/v2.1.0'
+    run select_highest_semver_tag <<< "$input"
+    [ "$output" = "2.1.0" ]
+}
+
+@test "select_highest_semver_tag: empty input yields empty output" {
+    run select_highest_semver_tag <<< ""
+    [ "$output" = "" ]
+}
+
+# ---------------------------------------------------------------------------
 # get_config
 # ---------------------------------------------------------------------------
 

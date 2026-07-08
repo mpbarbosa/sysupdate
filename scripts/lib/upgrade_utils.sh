@@ -174,6 +174,25 @@ config_driven_version_check() {
 # GITHUB API FUNCTIONS
 #=============================================================================
 
+# Select the highest clean semantic version from a stream of git tag refs (or
+# bare tag names) on stdin.
+#
+# Repos with a mixed-prefix tag namespace expose tags like
+# "matchmaker-cli-v0.0.32", "matchmaker-lib-v0.0.28", and "v0.0.5" side by side.
+# A naive `sed 's/^v//' | sort -V` lets a prefixed, non-semver string
+# ("matchmaker-partial-v0.0.30") win the sort and leak out as a bogus "latest".
+# To avoid that we extract only the trailing vX.Y[.Z...] from each tag and drop
+# anything that doesn't reduce to a bare semver, so a non-semver tag can never
+# win.
+select_highest_semver_tag() {
+    awk -F/ '{print $NF}' | \
+        sed 's/\^{}$//' | \
+        grep -oiE 'v?[0-9]+(\.[0-9]+)+$' | \
+        sed 's/^[vV]//' | \
+        sort -Vu | \
+        tail -1
+}
+
 get_github_latest_remote_tag_fallback() {
     local owner="$1"
     local repo="$2"
@@ -184,11 +203,7 @@ get_github_latest_remote_tag_fallback() {
     fi
 
     git ls-remote --tags "https://github.com/$owner/$repo.git" 2>/dev/null | \
-        awk -F/ '/refs\/tags\// {print $NF}' | \
-        sed 's/\^{}$//' | \
-        sed 's/^v//' | \
-        sort -Vu | \
-        tail -1
+        select_highest_semver_tag
 }
 
 # Fetch latest version tag from GitHub releases
