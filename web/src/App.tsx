@@ -98,7 +98,7 @@ const PACKAGE_MANAGER_SUMMARY_CONFIG: Record<
   apt_updates: {
     id: 'manager-apt',
     name: 'APT packages',
-    snippetId: undefined,
+    snippetId: 'apt',
     category: 'system',
     typeLabel: 'package manager',
     description: 'APT package update inventory discovered from the live sysupdate package check.',
