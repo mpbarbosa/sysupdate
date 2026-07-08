@@ -10,6 +10,13 @@
 #   0.1.0-alpha (2026-05-26) - Initial alpha version
 #                            - Cargo-only install/update workflow
 #                            - Uses GitHub releases for latest version checks
+#   0.2.0-alpha (2026-07-03) - Switched from Cargo to the official prebuilt-binary
+#                              installer (install.sh). crates.io is frozen at 0.0.42
+#                              while GitHub releases advance, and the 0.0.42 build no
+#                              longer compiles (upstream cli_boilerplate_automation
+#                              0.5.0 API break). Upstream discourages cargo. `mm` has
+#                              no --version flag, so the installed version is tracked
+#                              in a stamp file ($MATCHMAKER_VERSION_FILE).
 #
 # Reference: https://github.com/Squirreljetpack/matchmaker
 
@@ -19,18 +26,19 @@ application:
   display_name: "Matchmaker CLI"
 
 dependencies:
-  - name: "cargo"
-    command: "cargo"
+  - name: "curl"
+    command: "curl"
     help: |
-      Install Rust and Cargo first:
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+      Install curl first (needed to download the Matchmaker installer):
+        sudo apt install curl     # Debian/Ubuntu
+        sudo pacman -S curl       # Arch
     required: true
 
 messages:
   checking_updates: "Checking Matchmaker CLI updates..."
   install_help: |
-    Install Matchmaker CLI with Cargo:
-      cargo install matchmaker-cli
+    Install Matchmaker CLI with the official installer (prebuilt binary):
+      curl -fsSL https://raw.githubusercontent.com/Squirreljetpack/matchmaker/main/install.sh | sh
 
     Upstream project:
       https://github.com/Squirreljetpack/matchmaker
@@ -39,12 +47,18 @@ messages:
   install_prompt: "Matchmaker CLI is not installed. Install it now?"
 
 version:
-  command: "cargo install --list | grep '^matchmaker-cli v' | head -1"
-  regex: '^matchmaker-cli v([0-9]+\.[0-9]+\.[0-9]+):$'
+  # `mm` exposes no --version flag and the prebuilt binary embeds no version
+  # string, so the installed version is read from a stamp file that the snippet
+  # writes after every successful install. 0.0.0 fallback (stamp missing, e.g.
+  # first run after this fix or a manual install) forces a reinstall via the
+  # installer, which then creates the stamp. This command only runs once `mm`
+  # is confirmed installed, so 0.0.0 never misreports an absent tool.
+  command: 'v=$(cat "$MATCHMAKER_VERSION_FILE" 2>/dev/null); echo "${v:-0.0.0}"'
+  regex: '([0-9]+\.[0-9]+\.[0-9]+)'
   source: "github"
   github_owner: "Squirreljetpack"
   github_repo: "matchmaker"
 
 update:
-  command: "cargo install matchmaker-cli --force"
+  command: "curl -fsSL https://raw.githubusercontent.com/Squirreljetpack/matchmaker/main/install.sh | sh"
   output_lines: 20

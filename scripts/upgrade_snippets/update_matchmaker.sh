@@ -4,11 +4,12 @@
 # SNIPPET_ID: matchmaker
 # SNIPPET_NAME: Matchmaker CLI
 #
-# Handles installation and updates for Matchmaker CLI via Cargo.
+# Handles installation and updates for Matchmaker CLI via the official
+# prebuilt-binary installer (install.sh).
 # Reference: https://github.com/Squirreljetpack/matchmaker
 #
-# Version: 0.1.0-alpha
-# Date: 2026-05-26
+# Version: 0.2.0-alpha
+# Date: 2026-07-03
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
@@ -17,6 +18,11 @@
 #   0.1.0-alpha (2026-05-26) - Initial alpha version
 #                            - Cargo-only install/update workflow
 #                            - Supports install when Matchmaker is missing
+#   0.2.0-alpha (2026-07-03) - Switched from `cargo install matchmaker-cli` to the
+#                              official installer: crates.io is frozen at 0.0.42
+#                              (GitHub releases advance independently) and the 0.0.42
+#                              build no longer compiles. Installed version is tracked
+#                              in a stamp file since `mm` has no --version flag.
 #
 
 MATCHMAKER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +30,28 @@ LIB_DIR="$(cd "$MATCHMAKER_SCRIPT_DIR/../lib" && pwd)"
 source "$LIB_DIR/upgrade_utils.sh"
 
 CONFIG_FILE="$MATCHMAKER_SCRIPT_DIR/matchmaker.yaml"
+
+# `mm` has no --version flag and the prebuilt release binary embeds no version
+# string, so the installed version is tracked in this stamp file. It is exported
+# because matchmaker.yaml's version.command reads it via eval (get_config).
+export MATCHMAKER_VERSION_FILE="${SYSUPDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/sysupdate}/matchmaker.version"
+
+# Record the version the installer just placed so the next run can compare
+# against GitHub releases. The installer always fetches the latest release, so
+# the stamp is LATEST_VERSION (set during the update flow) or, when unset (the
+# install-if-missing path), a fresh GitHub lookup. A blank result is not stamped.
+write_matchmaker_stamp() {
+    local ver="$LATEST_VERSION"
+    if [ -z "$ver" ]; then
+        local owner repo
+        owner=$(get_config "version.github_owner")
+        repo=$(get_config "version.github_repo")
+        ver=$(get_github_latest_version "$owner" "$repo")
+    fi
+    [ -z "$ver" ] && return 0
+    mkdir -p "$(dirname "$MATCHMAKER_VERSION_FILE")" 2>/dev/null
+    printf '%s\n' "$ver" > "$MATCHMAKER_VERSION_FILE"
+}
 
 perform_matchmaker_install_or_update() {
     local update_cmd
@@ -41,6 +69,7 @@ perform_matchmaker_install_or_update() {
     fi
 
     [ -n "$update_output" ] && echo "$update_output" | tail -"${output_lines:-20}"
+    write_matchmaker_stamp
     print_success "$success_msg"
     show_installation_info "mm" "$APP_DISPLAY_NAME"
     return 0
