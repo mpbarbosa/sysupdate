@@ -33,36 +33,30 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$SCRIPT_DIR/vscode_insiders.yaml"
 
-# Get latest VSCode Insiders version from download redirect
-get_vscode_insiders_latest_version() {
-    local fetch_url
-    fetch_url=$(get_config "version.custom_fetch_url")
-    local version_regex
-    version_regex=$(get_config "version.version_regex")
-    
-    # Extract version from redirect URL
-    # Format: https://vscode.download.prss.microsoft.com/dbazure/download/insider/HASH/code-insiders_VERSION_amd64.deb
-    local latest_version
-    latest_version=$(curl -sL "$fetch_url" -I 2>/dev/null | \
-                     grep -i 'location:' | \
-                     sed -E "s/.*$version_regex.*/\1/" | \
-                     tr -d '\r')
-    echo "$latest_version"
-}
+# Resolve the VSCode Insiders download redirect once and cache the .deb URL.
+# Both the version and commit hash are parsed from this single result, so we
+# never issue two separate curl requests (Microsoft's CDN load-balances them
+# and can return different redirect chains, leaving the commit hash empty).
+VSCODE_INSIDERS_DEB_URL=""
+resolve_vscode_insiders_deb_url() {
+    # Return the cached URL if we already resolved it this run.
+    if [ -n "$VSCODE_INSIDERS_DEB_URL" ]; then
+        echo "$VSCODE_INSIDERS_DEB_URL"
+        return 0
+    fi
 
-# Get latest VSCode Insiders commit hash from download redirect
-get_vscode_insiders_latest_commit() {
     local fetch_url
     fetch_url=$(get_config "version.custom_fetch_url")
-    
-    # Extract commit hash from the redirect URL
+
+    # Follow the redirect chain and keep only the location line that points at
+    # the code-insiders .deb (there may be several redirect hops).
     # Format: https://vscode.download.prss.microsoft.com/dbazure/download/insider/HASH/code-insiders_VERSION_amd64.deb
-    local latest_commit
-    latest_commit=$(curl -sL "$fetch_url" -I 2>/dev/null | \
-                    grep -i 'location:' | \
-                    sed -E 's|.*/insider/([a-f0-9]{40})/.*|\1|' | \
-                    tr -d '\r')
-    echo "$latest_commit"
+    VSCODE_INSIDERS_DEB_URL=$(curl -sL "$fetch_url" -I 2>/dev/null | \
+                              tr -d '\r' | \
+                              grep -i '^location:' | \
+                              grep -o 'https[^ ]*code-insiders_[^ ]*\.deb' | \
+                              tail -n1)
+    echo "$VSCODE_INSIDERS_DEB_URL"
 }
 
 # Custom version check for VSCode Insiders
@@ -104,11 +98,16 @@ perform_vscode_version_check() {
         return 1
     fi
     
-    # Get latest version and commit hash
+    # Resolve the download redirect once, then parse both version and commit
+    # from the same URL so the two never disagree.
+    local deb_url
+    deb_url=$(resolve_vscode_insiders_deb_url)
+    local version_regex
+    version_regex=$(get_config "version.version_regex")
     local latest_version
-    latest_version=$(get_vscode_insiders_latest_version)
+    latest_version=$(echo "$deb_url" | sed -E "s/.*$version_regex.*/\1/")
     local latest_commit
-    latest_commit=$(get_vscode_insiders_latest_commit)
+    latest_commit=$(echo "$deb_url" | sed -E 's|.*/insider/([a-f0-9]{40})/.*|\1|')
     
     print_status "Current version: $current_version (commit: ${current_commit:0:7})"
     print_status "Latest version:  $latest_version (commit: ${latest_commit:0:7})"
