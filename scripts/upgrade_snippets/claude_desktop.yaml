@@ -1,0 +1,58 @@
+# Claude Desktop (Linux) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-07-07
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Claude Desktop has no official Linux build; this snippet targets the
+# community packaging project aaddrick/claude-desktop-debian, which publishes
+# GitHub releases with prebuilt .deb assets.
+#
+# Version History:
+#   0.1.0-alpha (2026-07-07) - Initial alpha version
+#                            - Current version from the installed dpkg package
+#                            - Latest version + download URL from the matching
+#                              GitHub release .deb asset (install channel and
+#                              version source are the same artifact)
+#
+# Reference: https://github.com/aaddrick/claude-desktop-debian
+
+# Application identifiers
+application:
+  name: "claude-desktop"
+  command: "claude-desktop"
+  display_name: "Claude Desktop"
+
+# Community packaging project that publishes the .deb releases
+repository:
+  owner: "aaddrick"
+  repo: "claude-desktop-debian"
+
+# Messages
+messages:
+  checking_updates: "Checking Claude Desktop updates..."
+  install_help: |
+    Claude Desktop (Linux) is provided by the community project
+    aaddrick/claude-desktop-debian. Install the .deb from the latest release:
+
+      https://github.com/aaddrick/claude-desktop-debian/releases/latest
+
+    e.g. (amd64):
+      url=$(curl -fsSL https://api.github.com/repos/aaddrick/claude-desktop-debian/releases/latest \
+            | grep -oE '"browser_download_url": *"[^"]+claude-desktop_[0-9][^"]*_amd64\.deb"' \
+            | sed -E 's/.*"(https[^"]+)"/\1/')
+      wget -O claude-desktop.deb "$url"
+      sudo dpkg -i claude-desktop.deb && sudo apt-get install -f -y
+  failed_version: "Failed to determine the installed Claude Desktop version"
+  failed_latest: "Failed to determine the latest Claude Desktop release"
+  update_success: "Claude Desktop updated successfully"
+  downloading: "Downloading latest Claude Desktop package..."
+  installing: "Installing Claude Desktop..."
+
+# Update configuration
+update:
+  fix_dependencies: "apt-get install -f -y"
+  output_lines: 20
+  requires_sudo: true
