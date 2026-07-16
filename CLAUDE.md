@@ -44,6 +44,7 @@ Validation for the Bash core is `bash -n` / `shellcheck` plus the suites under `
 
 ```bash
 ./scripts/run_tests.sh                              # run ALL suites locally (bash lint, bats, backend, web); --no-web / --bash-only / --integration-only / --web-only
+npm test                                             # alias for ./scripts/run_tests.sh (root package.json; also what release tooling auto-detects)
 ./scripts/run_tests_docker.sh                       # same suites in a throwaway Docker container (no local bats/yq/shellcheck/node needed)
 
 bats tests/bash/                                    # unit: core_lib, upgrade_utils, npm health
