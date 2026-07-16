@@ -1,0 +1,11 @@
+{
+  "name": "sysupdate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bash system-update suite (multi-package-manager CLI) with a web dashboard and QuickShell widget.",
+  "license": "MIT",
+  "homepage": "https://github.com/mpbarbosa/sysupdate",
+  "scripts": {
+    "test": "bash scripts/run_tests.sh"
+  }
+}
