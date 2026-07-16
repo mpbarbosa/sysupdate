@@ -30,3 +30,4 @@ node --test tests/backend/server.test.mjs
 - [NODE_MODULE_GUIDE.md](../../docs/guides/NODE_MODULE_GUIDE.md) — pure/effectful split rules, the four exported utils functions
 - [ERROR_HANDLING_GUIDE.md](../../docs/guides/ERROR_HANDLING_GUIDE.md) — child process error handling, swallow test, 400 vs 500
 - [OBSERVABILITY_GUIDE.md](../../docs/guides/OBSERVABILITY_GUIDE.md) — JSON event schema the bridge parses from stderr
+- [DEFENSIVE_CODING_GUIDE.md](../../docs/guides/DEFENSIVE_CODING_GUIDE.md) — validating HTTP request bodies at the route boundary (`sanitizeSnippetId` → 400), and file/JSONL reads (`readLogHistory`)
