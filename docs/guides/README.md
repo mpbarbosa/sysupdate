@@ -26,6 +26,7 @@ integration-boundary risk. Imported guides focus on those realities.
 | [Incremental Change Guide](./INCREMENTAL_CHANGE_GUIDE.md) | The CI/CD pipeline provides verification gates; all AI-assisted work should use the stacked change pattern. |
 | [Naming Guide](./NAMING_GUIDE.md) | The mixed-language codebase (Bash, TypeScript, YAML, env vars, snippet IDs) needs explicit per-layer naming conventions. |
 | [Error Handling Guide](./ERROR_HANDLING_GUIDE.md) | Errors span Bash exit codes, Node.js child process events, and React UI states — each layer has distinct handling rules. |
+| [Defensive Coding Guide](./DEFENSIVE_CODING_GUIDE.md) | Boundary validation now spans snippet IDs (`sanitizeSnippetId`), external version resolution (`select_highest_semver_tag`, per-snippet regexes, layered API fallbacks), and the browser `localStorage` surface (`loadAutoUpdateIds`); several past bugs were unvalidated-external-input failures. |
 | [Claude Code Workflow Guide](./CLAUDE_CODE_WORKFLOW_GUIDE.md) | Operational patterns for Claude Code sessions: prompt construction, tool call review, verification rhythm, course correction, and commit discipline. |
 
 ## Not imported
@@ -34,13 +35,14 @@ integration-boundary risk. Imported guides focus on those realities.
 | --- | --- |
 | `UNIT_TEST_GUIDE.md` → **imported** | Previously deferred ("import once unit tests exist"); BATS and Vitest suites now active. |
 | `OBSERVABILITY_GUIDE.md` → **imported** | Previously not imported; `emit_event` / `emit_summary_event` JSON protocol now a core architectural feature. |
-| `REFERENTIAL_TRANSPARENCY.md` | Partially covered by the Observability and Clean Architecture guides. `utils.js` pure-function split is the main application. Import if the pure functional core pattern becomes a recurring design pressure. |
+| `DEFENSIVE_CODING_GUIDE.md` → **imported** | Previously deferred ("import if new user-input surfaces are added beyond snippet IDs"); the web dashboard added a `localStorage` boundary (`loadAutoUpdateIds`) and the CLI hardened external API/redirect/tag parsing (`select_highest_semver_tag`), so the condition now holds. |
+| `REFERENTIAL_TRANSPARENCY.md` | Still adequately covered by the Node.js Module and Clean Architecture guides; `web/backend/utils.js` remains the main pure-function application. Import if the pure functional core pattern becomes a recurring design pressure (the new effect-heavy auto-upgrade orchestration in `App.tsx` is a watch-point, not yet a trigger). |
 | `DDD_GUIDE.md`, `LIGHTWEIGHT_DDD_GUIDE.md`, `DOMAIN_DESIGN_CONTROL_GUIDE.md` | `sysupdate` is a tool runner, not a domain-model-heavy application. Module boundaries explain the architecture better than DDD vocabulary. |
 | `REST_API_GUIDE.md` | The local backend bridge is intentionally thin and local-only. REST design principles are not the primary pressure here. |
 | `MOBILE_FIRST_GUIDE.md` | Not relevant to a Bash CLI with a desktop-oriented dashboard. |
 | `SOLID_GUIDE.md` | The OO-centric framing does not map naturally to Bash + small Node.js modules. Relevant principles already appear in High Cohesion, Low Coupling, and Clean Architecture guides. |
-| `INTERFACE_FIRST_GUIDE.md` | The JSON event schema is the key interface; it is covered adequately by the Observability and Incremental Change guides. Import if formal interface contracts become needed for new adapters. |
-| `DEFENSIVE_CODING_GUIDE.md` | `sanitizeSnippetId` boundary validation is the main application of this guide. The Error Handling guide covers the boundary validation principle. Import if new user-input surfaces are added beyond snippet IDs. |
+| `INTERFACE_FIRST_GUIDE.md` | The JSON event schema is the key interface; it is covered adequately by the Observability and Incremental Change guides. Import if formal interface contracts become needed for new adapters (e.g., when the QuickShell widget moves past design stage). |
+| `GUIDE_AUTHORING_GUIDE.md` (meta) | A meta-guide for authoring new guides *inside* `doc_template_lib` itself. Not an engineering guide for a consumer repo; `sysupdate` imports and adapts guides rather than authoring them from scratch. |
 
 ## How to use these guides here
 
@@ -66,7 +68,11 @@ integration-boundary risk. Imported guides focus on those realities.
    YAML keys, or TypeScript types.
 10. Use [Error Handling Guide](./ERROR_HANDLING_GUIDE.md) when adding new
     snippet failure modes or backend route error responses.
-11. Use [LLM Context Efficiency Guide](./LLM_CONTEXT_GUIDE.md) when
+11. Use [Defensive Coding Guide](./DEFENSIVE_CODING_GUIDE.md) when adding a new
+    external-input surface — parsing `curl`/`gh`/redirect/`dpkg` output in a
+    snippet, a backend route reading a request body, or frontend code reading
+    `localStorage` / WebSocket data.
+12. Use [LLM Context Efficiency Guide](./LLM_CONTEXT_GUIDE.md) when
     `CLAUDE.md` files need updating or snippet patterns are diverging.
 
 ## Canonical command reference

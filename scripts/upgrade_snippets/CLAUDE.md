@@ -27,3 +27,4 @@ shellcheck scripts/upgrade_snippets/update_<name>.sh
 - [OBSERVABILITY_GUIDE.md](../../docs/guides/OBSERVABILITY_GUIDE.md) — `summary.updates` event rules, `emit_summary_event` usage
 - [INCREMENTAL_CHANGE_GUIDE.md](../../docs/guides/INCREMENTAL_CHANGE_GUIDE.md) — stacked change pattern for adding snippets
 - [ERROR_HANDLING_GUIDE.md](../../docs/guides/ERROR_HANDLING_GUIDE.md) — tool-not-found vs update-failure handling
+- [DEFENSIVE_CODING_GUIDE.md](../../docs/guides/DEFENSIVE_CODING_GUIDE.md) — validating external command/API/redirect/tag output at the snippet boundary (version regexes, `select_highest_semver_tag`, layered fallbacks)
