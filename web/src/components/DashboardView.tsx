@@ -5,6 +5,8 @@ import { getSeverityColor, getThemeColorHex } from '../theme';
 interface DashboardViewProps {
   items: UpdateItem[];
   onUpgrade: (id: string) => void;
+  autoUpdateIds: Set<string>;
+  onToggleAutoUpdate: (id: string) => void;
   terminalLines: TerminalLine[];
   isProcessing: boolean;
   pendingTotal: number;
@@ -24,10 +26,14 @@ const TERMINAL_LINE_COLOR: Record<TerminalLine['type'], string> = {
 function UpdateItemCard({
   item,
   onUpgrade,
+  autoUpdate,
+  onToggleAutoUpdate,
   themeColor,
 }: {
   item: UpdateItem;
   onUpgrade: (id: string) => void;
+  autoUpdate: boolean;
+  onToggleAutoUpdate: (id: string) => void;
   themeColor: SystemConfig['themeColor'];
 }) {
   const accent = getThemeColorHex(themeColor);
@@ -91,6 +97,17 @@ function UpdateItemCard({
           ))}
         </ul>
       )}
+
+      <label className="mt-3 flex cursor-pointer select-none items-center gap-2 border-t border-hud-border pt-2 font-mono text-[11px] uppercase tracking-wider text-slate-400">
+        <input
+          type="checkbox"
+          checked={autoUpdate}
+          onChange={() => onToggleAutoUpdate(item.id)}
+          className="h-3.5 w-3.5 cursor-pointer"
+          style={{ accentColor: accent }}
+        />
+        <span>Update automatically</span>
+      </label>
     </div>
   );
 }
@@ -98,6 +115,8 @@ function UpdateItemCard({
 export default function DashboardView({
   items,
   onUpgrade,
+  autoUpdateIds,
+  onToggleAutoUpdate,
   terminalLines,
   isProcessing,
   pendingTotal,
@@ -120,7 +139,14 @@ export default function DashboardView({
             <p className="font-mono text-xs text-slate-500">No items in this category.</p>
           ) : (
             items.map((item) => (
-              <UpdateItemCard key={item.id} item={item} onUpgrade={onUpgrade} themeColor={themeColor} />
+              <UpdateItemCard
+                key={item.id}
+                item={item}
+                onUpgrade={onUpgrade}
+                autoUpdate={autoUpdateIds.has(item.id)}
+                onToggleAutoUpdate={onToggleAutoUpdate}
+                themeColor={themeColor}
+              />
             ))
           )}
         </div>
