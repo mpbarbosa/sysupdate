@@ -43,6 +43,9 @@ Validation for the Bash core is `bash -n` / `shellcheck` plus the suites under `
 `ci-web.yml`).
 
 ```bash
+./scripts/run_tests.sh                              # run ALL suites locally (bash lint, bats, backend, web); --no-web / --bash-only / --integration-only / --web-only
+./scripts/run_tests_docker.sh                       # same suites in a throwaway Docker container (no local bats/yq/shellcheck/node needed)
+
 bats tests/bash/                                    # unit: core_lib, upgrade_utils, npm health
 bats tests/integration/                             # CLI seam + JSON event contract (uses fixture snippets)
 node --test tests/backend/server.test.mjs           # backend bridge (uses stub_script.sh)
