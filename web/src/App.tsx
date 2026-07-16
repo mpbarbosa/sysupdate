@@ -158,6 +158,31 @@ const slugify = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
+const AUTO_UPDATE_STORAGE_KEY = 'sysupdate.autoUpdateIds';
+
+// Per-item "update automatically" preference. There is no backend for this yet,
+// so it is persisted client-side in localStorage, keyed by the stable item id.
+const loadAutoUpdateIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(AUTO_UPDATE_STORAGE_KEY);
+    if (!raw) {
+      return new Set();
+    }
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.filter((id): id is string => typeof id === 'string')) : new Set();
+  } catch {
+    return new Set();
+  }
+};
+
+const saveAutoUpdateIds = (ids: Set<string>): void => {
+  try {
+    localStorage.setItem(AUTO_UPDATE_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Storage unavailable (private mode / quota) — preference stays in-memory only.
+  }
+};
+
 const isCheckOnlyRun = (args: string[]): boolean => args.includes('--check-only');
 
 const getRunSnippetId = (args: string[]): string | null => {
@@ -173,6 +198,17 @@ const getRunSnippetId = (args: string[]): string | null => {
 function App() {
   const websocketRef = useRef<WebSocket | null>(null);
   const refreshAfterUpgradeRef = useRef(false);
+  // Auto-upgrade orchestration: after a check-only scan, ticked items with an
+  // available update are upgraded one at a time (the backend runs one job).
+  const autoUpgradeQueueRef = useRef<{ itemId: string; snippetId: string; name: string }[]>([]);
+  const autoUpgradeInProgressRef = useRef(false);
+  const handledScanIdRef = useRef<string | null>(null);
+  const advancedRunIdRef = useRef<string | null>(null);
+  const runNextAutoUpgradeRef = useRef<() => void>(() => {});
+  // `${itemId}@${latestVersion}` already auto-attempted — prevents an item that
+  // cannot advance (e.g. apt kept-back) from looping, while a genuinely new
+  // target version re-enables auto-upgrade.
+  const attemptedAutoUpgradeRef = useRef<Set<string>>(new Set());
   const [activeView, setActiveView] = useState<ViewName>('dashboard');
   const [activeCategory, setActiveCategory] = useState<SidebarCategory>('all');
   const [updateItems, setUpdateItems] = useState<UpdateItem[]>([]);
@@ -182,6 +218,20 @@ function App() {
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([INITIAL_TERMINAL_LINE]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentRun, setCurrentRun] = useState<BackendRunSnapshot | null>(null);
+  const [autoUpdateIds, setAutoUpdateIds] = useState<Set<string>>(loadAutoUpdateIds);
+
+  const handleToggleAutoUpdate = useCallback((id: string) => {
+    setAutoUpdateIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      saveAutoUpdateIds(next);
+      return next;
+    });
+  }, []);
 
   const normalizeCategory = useCallback((value: unknown): Category => {
     return typeof value === 'string' && VALID_CATEGORIES.includes(value as Category)
@@ -424,6 +474,55 @@ function App() {
     applyRunSnapshot(payload.run);
   }, [applyRunSnapshot]);
 
+  // Pull the next item off the auto-upgrade queue and start its upgrade run.
+  // Queue advancement on completion is handled by the effect watching currentRun.
+  const runNextAutoUpgrade = useCallback(() => {
+    const next = autoUpgradeQueueRef.current.shift();
+    if (!next) {
+      autoUpgradeInProgressRef.current = false;
+      // Final read-only re-scan so cards reflect post-upgrade versions.
+      window.setTimeout(() => {
+        void startBackendCheckOnlyRun().catch(() => {
+          /* surfaced via the standard check-only error path */
+        });
+      }, 500);
+      return;
+    }
+
+    setUpdateItems((previous) =>
+      previous.map((entry) => (entry.id === next.itemId ? { ...entry, status: 'updating' } : entry)),
+    );
+    setTerminalLines((previous) => [
+      ...previous,
+      {
+        id: `auto-upgrade-${next.snippetId}-${Date.now()}`,
+        text: `Auto-update: upgrading ${next.name}...`,
+        type: 'dim',
+      },
+    ]);
+
+    void startBackendUpgradeRun(next.snippetId).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown backend error.';
+      setUpdateItems((previous) =>
+        previous.map((entry) => (entry.id === next.itemId ? { ...entry, status: 'failed' } : entry)),
+      );
+      setTerminalLines((previous) => [
+        ...previous,
+        {
+          id: `auto-upgrade-error-${Date.now()}`,
+          text: `Auto-update failed for ${next.name}: ${message}`,
+          type: 'error',
+        },
+      ]);
+      // A start failure produces no run to complete on, so advance the queue here.
+      runNextAutoUpgradeRef.current();
+    });
+  }, [startBackendUpgradeRun, startBackendCheckOnlyRun]);
+
+  useEffect(() => {
+    runNextAutoUpgradeRef.current = runNextAutoUpgrade;
+  }, [runNextAutoUpgrade]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -506,6 +605,69 @@ function App() {
       window.clearTimeout(refreshTimer);
     };
   }, [currentRun, startBackendCheckOnlyRun]);
+
+  // Auto-upgrade orchestration. Runs when a run finishes (not while active).
+  useEffect(() => {
+    if (!currentRun) {
+      return;
+    }
+    if (currentRun.status === 'starting' || currentRun.status === 'running') {
+      return;
+    }
+
+    const checkOnly = isCheckOnlyRun(currentRun.args);
+
+    // 1) A queued auto-upgrade run just finished — advance to the next item.
+    //    Guarded by run id so repeated snapshots of the same run advance once.
+    if (
+      autoUpgradeInProgressRef.current &&
+      !checkOnly &&
+      advancedRunIdRef.current !== currentRun.id
+    ) {
+      advancedRunIdRef.current = currentRun.id;
+      runNextAutoUpgrade();
+      return;
+    }
+
+    // 2) A check-only scan finished — enqueue every ticked item that has an
+    //    available update and a live snippet, and upgrade them one at a time.
+    if (
+      checkOnly &&
+      !autoUpgradeInProgressRef.current &&
+      handledScanIdRef.current !== currentRun.id
+    ) {
+      handledScanIdRef.current = currentRun.id;
+      const eligible = updateItems.filter(
+        (item) =>
+          item.status === 'ready' &&
+          Boolean(item.snippetId) &&
+          autoUpdateIds.has(item.id) &&
+          !attemptedAutoUpgradeRef.current.has(`${item.id}@${item.latestVersion}`),
+      );
+      if (eligible.length > 0) {
+        autoUpgradeInProgressRef.current = true;
+        autoUpgradeQueueRef.current = eligible.map((item) => ({
+          itemId: item.id,
+          snippetId: item.snippetId as string,
+          name: item.name,
+        }));
+        eligible.forEach((item) =>
+          attemptedAutoUpgradeRef.current.add(`${item.id}@${item.latestVersion}`),
+        );
+        setTerminalLines((previous) => [
+          ...previous,
+          {
+            id: `auto-update-batch-${currentRun.id}`,
+            text: `Auto-update: ${eligible.length} item(s) queued — ${eligible
+              .map((item) => item.name)
+              .join(', ')}`,
+            type: 'dim',
+          },
+        ]);
+        runNextAutoUpgrade();
+      }
+    }
+  }, [currentRun, updateItems, autoUpdateIds, runNextAutoUpgrade]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -738,6 +900,8 @@ function App() {
           <DashboardView
             items={filteredItems}
             onUpgrade={handleUpgrade}
+            autoUpdateIds={autoUpdateIds}
+            onToggleAutoUpdate={handleToggleAutoUpdate}
             terminalLines={terminalLines}
             isProcessing={isProcessing}
             pendingTotal={pendingTotal}
