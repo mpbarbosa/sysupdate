@@ -57,9 +57,11 @@ update_android_studio() {
     print_status "Installed build: $current_version"
 
     # Google publishes no stable machine-readable latest-version feed for the
-    # IDE, so the latest version is reported as unknown by design.
+    # IDE, and Android Studio updates itself via Help > Check for Updates. This
+    # is informational, not a failure: report "self_managed" (not "unknown", which
+    # consumers treat as a fetch failure and render as a red/RETRY card).
     emit_summary_event "version_check" "target" "$ANDROID_STUDIO_DISPLAY_NAME" \
-        "status" "unknown" "current_version" "$current_version" "latest_version" "unknown"
+        "status" "self_managed" "current_version" "$current_version" "latest_version" "unknown"
 
     print_status "Android Studio updates in place via Help > Check for Updates."
     print_status "Full installer downloads: $ANDROID_STUDIO_DOWNLOAD_URL"
