@@ -1,0 +1,68 @@
+# Fastfetch Update Configuration
+#
+# Version: 0.2.0-alpha
+# Date: 2026-07-14
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Fastfetch is the system-info tool invoked by scripts/system_summary.sh.
+# This snippet tracks the UPSTREAM fastfetch-cli/fastfetch releases (which run
+# well ahead of distro repos) and installs the official prebuilt .deb — the
+# same channel the tool is installed from once you switch off the apt package.
+# The install channel (github .deb) matches the version source (github release),
+# so it never reports an update it cannot apply.
+#
+# Version History:
+#   0.1.0-alpha (2026-07-07) - Initial apt-based version check and update
+#   0.2.0-alpha (2026-07-14) - Switched to upstream github .deb: current from
+#                              `fastfetch --version`, latest from the
+#                              fastfetch-cli/fastfetch release, installed via the
+#                              stable releases/latest/download redirect.
+#
+# Reference: https://github.com/fastfetch-cli/fastfetch
+
+# Application identifiers
+application:
+  name: "fastfetch"
+  command: "fastfetch"
+  display_name: "Fastfetch"
+
+# Messages
+messages:
+  checking_updates: "Checking Fastfetch updates..."
+  install_help: |
+    Install Fastfetch from the official releases (amd64):
+      wget -O fastfetch.deb \
+        https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-amd64.deb
+      sudo dpkg -i fastfetch.deb && sudo apt-get install -f -y
+    Reference: https://github.com/fastfetch-cli/fastfetch
+  failed_version: "Failed to get current Fastfetch version"
+  update_success: "Fastfetch updated successfully"
+  downloading: "Downloading latest Fastfetch package from {url}..."
+  installing: "Installing Fastfetch..."
+  failed_download_url: "Failed to resolve the Fastfetch download URL"
+
+# Version extraction
+#   current: fastfetch's own clean semver (e.g. 2.66.0), matching the release tag
+#   latest:  fastfetch-cli/fastfetch release tag (github source, with the shared
+#            rate-limit fallback to gh / git-ls-remote tag resolution)
+version:
+  command: "fastfetch --version"
+  regex: 'fastfetch ([0-9]+\.[0-9]+\.[0-9]+)'
+  source: "github"
+  github_owner: "fastfetch-cli"
+  github_repo: "fastfetch"
+
+# Update configuration
+#   The release asset name carries no version (fastfetch-linux-<arch>.deb), so
+#   the stable per-release redirect always points at the current .deb — no
+#   version needs to be interpolated into the URL.
+#   NOTE: amd64 only. On arm64 change the asset to fastfetch-linux-aarch64.deb.
+update:
+  method: "deb"
+  redirect_url: "https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-amd64.deb"
+  temp_file: "/tmp/fastfetch_update.deb"
+  fix_dependencies: "apt-get install -f -y"
+  output_lines: 20
+  requires_sudo: true
