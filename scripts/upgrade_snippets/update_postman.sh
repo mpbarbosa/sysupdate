@@ -532,7 +532,7 @@ perform_postman_update() {
     
     # Download latest tarball
     print_status "$download_msg"
-    if ! wget -q --show-progress "$download_url" -O "$temp_tarball"; then
+    if ! download_with_progress "$download_url" "$temp_tarball"; then
         rm -f "$temp_tarball"
         print_error "Failed to download Postman"
         return 1

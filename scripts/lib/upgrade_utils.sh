@@ -980,6 +980,26 @@ perform_configured_deb_package_update() {
     verify_configured_update_result "$CURRENT_VERSION" "$LATEST_VERSION" "$success_msg"
 }
 
+# Download a URL to a file, showing wget's progress bar only on an interactive
+# terminal. When the CLI is spawned by the web backend, its stdio is piped
+# (non-TTY), where `wget --show-progress` degrades to per-chunk dot progress
+# (one line every ~50KB) written to stderr. The backend forwards each such line
+# as a terminal event, so a large download floods the Live Output Console and
+# the JSON event stream with thousands of lines. In the non-TTY case use -nv
+# (a single summary line) instead.
+# Usage: download_with_progress <url> <output_path>
+# Returns: wget's exit code
+download_with_progress() {
+    local url="$1"
+    local output="$2"
+
+    if [ -t 2 ]; then
+        wget -q --show-progress "$url" -O "$output"
+    else
+        wget -nv "$url" -O "$output"
+    fi
+}
+
 # Generic installer script update handler
 # Handles common pattern of downloading and running an installer script
 # Usage: handle_installer_script_update
