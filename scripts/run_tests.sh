@@ -121,14 +121,47 @@ suite_shellcheck() {
         scripts/upgrade_snippets/*.sh
 }
 
+# Resolve a runnable `bats`. bats is commonly installed as an npm global under a
+# specific nvm Node version (e.g. ~/.nvm/versions/node/vX/bin/bats), which is not
+# on PATH when the runner is spawned under a different Node version or a minimal
+# environment (CI, the release pipeline). Fall back to the usual on-disk homes so
+# the bats suites run instead of being reported as "not found".
+# Echoes the bats path, or nothing if none is found.
+resolve_bats() {
+    if command -v bats >/dev/null 2>&1; then
+        command -v bats
+        return 0
+    fi
+    local candidate
+    for candidate in \
+        "$HOME/.local/bin/bats" \
+        /usr/local/bin/bats \
+        /usr/bin/bats \
+        "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/bats; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 suite_bats_unit() {
-    require bats "bats tests/bash/" || return 1
-    bats tests/bash/
+    local bats_bin
+    if ! bats_bin=$(resolve_bats); then
+        printf '%b⚠️  bats not found (PATH or ~/.nvm/.../bin) — needed for: bats tests/bash/%b\n' "$YELLOW" "$NC"
+        return 1
+    fi
+    "$bats_bin" tests/bash/
 }
 
 suite_bats_integration() {
-    require bats "bats tests/integration/" || return 1
-    bats tests/integration/
+    local bats_bin
+    if ! bats_bin=$(resolve_bats); then
+        printf '%b⚠️  bats not found (PATH or ~/.nvm/.../bin) — needed for: bats tests/integration/%b\n' "$YELLOW" "$NC"
+        return 1
+    fi
+    "$bats_bin" tests/integration/
 }
 
 suite_backend() {
