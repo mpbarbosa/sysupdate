@@ -290,3 +290,25 @@ def456\trefs/tags/latest
     [ ! -f "$SH_MARKER" ]      # NOT run with sh
     [ ! -f "$SUDO_MARKER" ]    # no sudo
 }
+
+# ---------------------------------------------------------------------------
+# download_with_progress
+# ---------------------------------------------------------------------------
+
+@test "download_with_progress: non-TTY stderr uses -nv, not --show-progress" {
+    # Under bats, fd 2 is not a terminal — the piped-backend case. The progress
+    # bar there degrades to per-chunk dot lines that flood the event stream, so
+    # the quiet -nv path must be taken.
+    local stubdir="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$stubdir"
+    cat > "$stubdir/wget" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*"
+STUB
+    chmod +x "$stubdir/wget"
+
+    PATH="$stubdir:$PATH" run download_with_progress "http://example.test/pkg.deb" "/tmp/pkg.deb"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-nv"* ]]
+    [[ "$output" != *"--show-progress"* ]]
+}

@@ -19,6 +19,12 @@ const PORT = Number(process.env.SYSUPDATE_WEB_PORT ?? '4174');
 const DEFAULT_LOG_LIMIT = Number(process.env.SYSUPDATE_LOG_LIMIT ?? '50');
 const MAX_TERMINAL_LINES = 600;
 const MAX_RAW_EVENTS = 1200;
+// wget dot-progress lines, e.g. "52500K .......... 18% 21,3M 26s". A large
+// download under a piped (non-TTY) child can emit thousands of these on stderr;
+// they carry no signal and would flood the terminal buffer and event stream.
+// Snippets prefer -nv when non-interactive (download_with_progress); this is a
+// defense-in-depth net for any tool that still emits progress dots.
+const PROGRESS_LINE_RE = /^\s*\d+[KMG][ .]+\d+%/;
 const LOG_FILE =
   process.env.SYSUPDATE_LOG_FILE ??
   path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), '.local', 'state'), 'sysupdate', 'run-history.jsonl');
@@ -132,16 +138,21 @@ function broadcastSnapshot(reason) {
   });
 }
 
-function addTerminalLine(text, type, source = 'bridge') {
-  if (!currentRun) {
+// All output/lifecycle writes are bound to the run that produced them (`run`),
+// not the global `currentRun`. Runs can overlap at the edges — a finishing
+// child's stream can still emit lines (and fire `close`) after the next run has
+// become current — and writing to `currentRun` in that window corrupts the new
+// run's buffer. Defaulting to `currentRun` keeps bridge-originated callers working.
+function addTerminalLine(text, type, source = 'bridge', run = currentRun) {
+  if (!run) {
     return;
   }
 
-  currentRun.terminalLines = trimArray(
+  run.terminalLines = trimArray(
     [
-      ...currentRun.terminalLines,
+      ...run.terminalLines,
       {
-        id: `${currentRun.id}-line-${currentRun.terminalLines.length + 1}`,
+        id: `${run.id}-line-${run.terminalLines.length + 1}`,
         text,
         type,
         source,
@@ -151,16 +162,16 @@ function addTerminalLine(text, type, source = 'bridge') {
   );
 }
 
-function storeRawEvent(event) {
-  if (!currentRun) {
+function storeRawEvent(event, run = currentRun) {
+  if (!run) {
     return;
   }
 
-  currentRun.rawEvents = trimArray([...currentRun.rawEvents, event], MAX_RAW_EVENTS);
+  run.rawEvents = trimArray([...run.rawEvents, event], MAX_RAW_EVENTS);
 }
 
-function handleCliEvent(event) {
-  if (!currentRun) {
+function handleCliEvent(event, run = currentRun) {
+  if (!run) {
     return;
   }
 
@@ -173,23 +184,23 @@ function handleCliEvent(event) {
         }
       : event;
 
-  storeRawEvent(enrichedEvent);
+  storeRawEvent(enrichedEvent, run);
 
   switch (enrichedEvent.event_type) {
     case 'run.started':
-      currentRun.status = 'running';
-      currentRun.runId = enrichedEvent.run_id ?? currentRun.runId;
+      run.status = 'running';
+      run.runId = enrichedEvent.run_id ?? run.runId;
       break;
     case 'terminal.line':
-      addTerminalLine(enrichedEvent.message ?? '', mapTerminalType(enrichedEvent.line_type), enrichedEvent.source ?? 'cli');
+      addTerminalLine(enrichedEvent.message ?? '', mapTerminalType(enrichedEvent.line_type), enrichedEvent.source ?? 'cli', run);
       break;
     case 'summary.updates': {
       const key = `${enrichedEvent.summary_name ?? 'summary'}:${enrichedEvent.target ?? enrichedEvent.package_manager ?? 'global'}`;
-      currentRun.summariesByKey[key] = enrichedEvent;
+      run.summariesByKey[key] = enrichedEvent;
       break;
     }
     case 'prompt.requested':
-      currentRun.prompt = {
+      run.prompt = {
         status: 'requested',
         promptType: enrichedEvent.prompt_type ?? 'unknown',
         message: enrichedEvent.prompt_message ?? '',
@@ -198,7 +209,7 @@ function handleCliEvent(event) {
       };
       break;
     case 'prompt.resolved':
-      currentRun.prompt = {
+      run.prompt = {
         status: 'resolved',
         promptType: enrichedEvent.prompt_type ?? 'unknown',
         message: enrichedEvent.prompt_message ?? '',
@@ -208,28 +219,32 @@ function handleCliEvent(event) {
       };
       break;
     case 'run.completed':
-      currentRun.status = 'completed';
-      currentRun.completedAt = enrichedEvent.timestamp ?? new Date().toISOString();
-      currentRun.exitCode = Number(enrichedEvent.exit_code ?? 0);
+      run.status = 'completed';
+      run.completedAt = enrichedEvent.timestamp ?? new Date().toISOString();
+      run.exitCode = Number(enrichedEvent.exit_code ?? 0);
       break;
     case 'run.failed':
-      currentRun.status = 'failed';
-      currentRun.completedAt = enrichedEvent.timestamp ?? new Date().toISOString();
-      currentRun.exitCode = Number(enrichedEvent.exit_code ?? 1);
+      run.status = 'failed';
+      run.completedAt = enrichedEvent.timestamp ?? new Date().toISOString();
+      run.exitCode = Number(enrichedEvent.exit_code ?? 1);
       break;
     case 'log.entry':
-      currentRun.lastLogEntry = enrichedEvent;
+      run.lastLogEntry = enrichedEvent;
       break;
     default:
       break;
   }
 
-  broadcast({ type: 'cli.event', payload: enrichedEvent });
-  broadcastSnapshot(enrichedEvent.event_type);
+  // Only the active run drives the live view; late events from a superseded run
+  // update its own (now historical) state without disturbing the current run.
+  if (run === currentRun) {
+    broadcast({ type: 'cli.event', payload: enrichedEvent });
+    broadcastSnapshot(enrichedEvent.event_type);
+  }
 }
 
-function processOutputLine(line, streamName) {
-  if (!currentRun) {
+function processOutputLine(line, streamName, run = currentRun) {
+  if (!run) {
     return;
   }
 
@@ -238,7 +253,12 @@ function processOutputLine(line, streamName) {
     return;
   }
 
-  if (streamName === 'stdout' && currentRun.args.includes('--json-events')) {
+  // Drop download progress-dot lines outright — high volume, zero signal.
+  if (PROGRESS_LINE_RE.test(cleaned)) {
+    return;
+  }
+
+  if (streamName === 'stdout' && run.args.includes('--json-events')) {
     return;
   }
 
@@ -246,7 +266,7 @@ function processOutputLine(line, streamName) {
     try {
       const parsed = JSON.parse(cleaned);
       if (parsed && typeof parsed === 'object' && 'event_type' in parsed) {
-        handleCliEvent(parsed);
+        handleCliEvent(parsed, run);
         return;
       }
     } catch {
@@ -254,15 +274,17 @@ function processOutputLine(line, streamName) {
     }
   }
 
-  addTerminalLine(cleaned, streamName === 'stderr' ? 'error' : 'output', streamName);
-  broadcast({
-    type: `${streamName}.line`,
-    payload: { text: cleaned },
-  });
-  broadcastSnapshot(`${streamName}.line`);
+  addTerminalLine(cleaned, streamName === 'stderr' ? 'error' : 'output', streamName, run);
+  if (run === currentRun) {
+    broadcast({
+      type: `${streamName}.line`,
+      payload: { text: cleaned },
+    });
+    broadcastSnapshot(`${streamName}.line`);
+  }
 }
 
-function attachLineReader(stream, streamName) {
+function attachLineReader(stream, streamName, run) {
   let buffer = '';
 
   stream.on('data', (chunk) => {
@@ -271,13 +293,13 @@ function attachLineReader(stream, streamName) {
     buffer = lines.pop() ?? '';
 
     for (const line of lines) {
-      processOutputLine(line, streamName);
+      processOutputLine(line, streamName, run);
     }
   });
 
   stream.on('end', () => {
     if (buffer) {
-      processOutputLine(buffer, streamName);
+      processOutputLine(buffer, streamName, run);
     }
   });
 }
@@ -299,7 +321,8 @@ function startRun(options = {}) {
     args.push('--snippet', options.snippetId);
   }
 
-  currentRun = createRunState(args);
+  const run = createRunState(args);
+  currentRun = run;
   broadcastSnapshot('run.prepared');
 
   const promptInput = options.autoConfirm ? createPromptInputFile(options.confirmResponse ?? 'y') : null;
@@ -309,7 +332,7 @@ function startRun(options = {}) {
     }
   };
 
-  activeChild = spawn(SCRIPT_PATH, args, {
+  const child = spawn(SCRIPT_PATH, args, {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -317,47 +340,47 @@ function startRun(options = {}) {
       ...(promptInput ? { SYSUPDATE_PROMPT_INPUT: promptInput.promptInputPath } : {}),
     },
   });
+  activeChild = child;
 
-  currentRun.status = 'running';
-  currentRun.pid = activeChild.pid ?? null;
+  run.status = 'running';
+  run.pid = child.pid ?? null;
 
-  attachLineReader(activeChild.stdout, 'stdout');
-  attachLineReader(activeChild.stderr, 'stderr');
+  attachLineReader(child.stdout, 'stdout', run);
+  attachLineReader(child.stderr, 'stderr', run);
 
-  activeChild.on('error', (error) => {
-    if (!currentRun) {
-      cleanupPromptInput();
-      return;
+  child.on('error', (error) => {
+    run.status = 'failed';
+    run.completedAt = new Date().toISOString();
+    run.exitCode = 1;
+    addTerminalLine(`Failed to start sysupdate: ${error.message}`, 'error', 'bridge', run);
+    // Only clear the shared child handle if this run still owns it.
+    if (activeChild === child) {
+      activeChild = null;
     }
-
-    currentRun.status = 'failed';
-    currentRun.completedAt = new Date().toISOString();
-    currentRun.exitCode = 1;
-    addTerminalLine(`Failed to start sysupdate: ${error.message}`, 'error', 'bridge');
-    broadcast({
-      type: 'bridge.error',
-      payload: { message: error.message },
-    });
-    activeChild = null;
     cleanupPromptInput();
-    broadcastSnapshot('bridge.error');
+    if (run === currentRun) {
+      broadcast({
+        type: 'bridge.error',
+        payload: { message: error.message },
+      });
+      broadcastSnapshot('bridge.error');
+    }
   });
 
-  activeChild.on('close', (code) => {
-    if (!currentRun) {
+  child.on('close', (code) => {
+    if (run.status === 'running' || run.status === 'starting') {
+      run.status = code === 0 ? 'completed' : 'failed';
+      run.completedAt = new Date().toISOString();
+      run.exitCode = code ?? 1;
+    }
+
+    if (activeChild === child) {
       activeChild = null;
-      return;
     }
-
-    if (currentRun.status === 'running' || currentRun.status === 'starting') {
-      currentRun.status = code === 0 ? 'completed' : 'failed';
-      currentRun.completedAt = new Date().toISOString();
-      currentRun.exitCode = code ?? 1;
-    }
-
-    activeChild = null;
     cleanupPromptInput();
-    broadcastSnapshot('process.closed');
+    if (run === currentRun) {
+      broadcastSnapshot('process.closed');
+    }
   });
 
   return {

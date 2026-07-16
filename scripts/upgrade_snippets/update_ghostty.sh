@@ -303,7 +303,7 @@ perform_ghostty_update_appimage() {
     backup_msg=$(get_config "messages.backing_up_appimage")
 
     print_status "$downloading_msg"
-    if ! wget -q --show-progress "$download_url" -O "$temp_file"; then
+    if ! download_with_progress "$download_url" "$temp_file"; then
         print_error "Failed to download Ghostty AppImage"
         rm -f "$temp_file"
         return 1

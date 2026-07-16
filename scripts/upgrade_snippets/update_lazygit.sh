@@ -130,7 +130,7 @@ perform_lazygit_update_binary() {
     install_dir=$(dirname "$install_path")
 
     print_status "$(get_config "messages.downloading")"
-    if ! wget -q --show-progress "$download_url" -O "$temp_file"; then
+    if ! download_with_progress "$download_url" "$temp_file"; then
         print_error "Failed to download lazygit release tarball"
         rm -f "$temp_file"
         return 1

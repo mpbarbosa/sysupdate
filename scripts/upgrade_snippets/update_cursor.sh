@@ -202,7 +202,7 @@ perform_cursor_update_deb() {
     downloading_msg=$(get_config "messages.downloading_deb")
     print_status "$downloading_msg"
 
-    if ! wget -q --show-progress "$download_url" -O "$temp_deb"; then
+    if ! download_with_progress "$download_url" "$temp_deb"; then
         print_error "Failed to download Cursor .deb package"
         rm -f "$temp_deb"
         return 1
@@ -241,7 +241,7 @@ perform_cursor_update_appimage() {
     downloading_msg=$(get_config "messages.downloading_appimage")
     print_status "$downloading_msg"
 
-    if ! wget -q --show-progress "$download_url" -O "$temp_appimage"; then
+    if ! download_with_progress "$download_url" "$temp_appimage"; then
         print_error "Failed to download Cursor AppImage"
         rm -f "$temp_appimage"
         return 1
