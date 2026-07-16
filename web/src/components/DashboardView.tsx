@@ -41,6 +41,9 @@ function UpdateItemCard({
   const isUpToDate = item.status === 'up_to_date';
   const isUpdating = item.status === 'updating';
   const isFailed = item.status === 'failed';
+  // Self-managed tools update via their own updater; no upgrade action, no
+  // meaningful "latest" — render neutrally, never as a failure/RETRY.
+  const isSelfManaged = item.status === 'self_managed';
   const canUpgrade = Boolean(item.snippetId);
 
   return (
@@ -62,11 +65,13 @@ function UpdateItemCard({
         <button
           type="button"
           onClick={() => onUpgrade(item.id)}
-          disabled={isUpToDate || isUpdating || !canUpgrade}
+          disabled={isUpToDate || isUpdating || isSelfManaged || !canUpgrade}
           className="shrink-0 rounded border px-3 py-1 font-mono text-[11px] font-bold uppercase tracking-widest transition-opacity disabled:opacity-50"
           style={
             isUpToDate
               ? { borderColor: '#5c7480', color: '#5c7480' }
+              : isSelfManaged
+                ? { borderColor: '#5c7480', color: '#5c7480' }
               : !canUpgrade
                 ? { borderColor: '#5c7480', color: '#5c7480' }
               : isFailed
@@ -74,7 +79,17 @@ function UpdateItemCard({
                 : { borderColor: accent, color: accent }
           }
         >
-          {isUpToDate ? 'Up to Date' : isUpdating ? 'Updating...' : !canUpgrade ? 'Unavailable' : isFailed ? 'Retry' : 'Upgrade'}
+          {isUpToDate
+            ? 'Up to Date'
+            : isUpdating
+              ? 'Updating...'
+              : isSelfManaged
+                ? 'Self-Update'
+                : !canUpgrade
+                  ? 'Unavailable'
+                  : isFailed
+                    ? 'Retry'
+                    : 'Upgrade'}
         </button>
       </div>
 
@@ -82,7 +97,7 @@ function UpdateItemCard({
 
       <div className="mt-2 flex items-center gap-2 font-mono text-xs">
         <span className="text-slate-500">{item.currentVersion}</span>
-        {!isUpToDate && (
+        {!isUpToDate && !isSelfManaged && (
           <>
             <span className="text-slate-600">→</span>
             <span style={{ color: accent }}>{item.latestVersion}</span>

@@ -10,7 +10,7 @@ export interface UpdateItem {
   currentVersion: string;
   latestVersion: string;
   typeLabel: string;
-  status: 'ready' | 'up_to_date' | 'updating' | 'failed';
+  status: 'ready' | 'up_to_date' | 'updating' | 'failed' | 'self_managed';
   severity: 'info' | 'minor' | 'major';
   description: string;
   changelog: string[];

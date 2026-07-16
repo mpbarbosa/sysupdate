@@ -21,6 +21,7 @@ import type {
   ViewName,
 } from './types';
 import { getFontSizeClass } from './theme';
+import { toUpdateStatus, toSeverity } from './summaryStatus';
 
 const nowTimestamp = (): string => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const INITIAL_TERMINAL_LINE: TerminalLine = {
@@ -290,39 +291,6 @@ function App() {
   );
 
   const mergeSummaryItems = useCallback((summaries: BackendSummaryEvent[], replaceExisting: boolean) => {
-    const toUpdateStatus = (status: unknown): UpdateItem['status'] => {
-      switch (status) {
-        case 'update_available':
-          return 'ready';
-        case 'not_installed':
-        case 'invalid_installation':
-        case 'unknown':
-        case 'insufficient_efi_space':
-          return 'failed';
-        default:
-          return 'up_to_date';
-      }
-    };
-
-    const toSeverity = (status: unknown, totalUpdates?: number): UpdateItem['severity'] => {
-      if (status === 'update_available') {
-        if ((totalUpdates ?? 0) >= 10) {
-          return 'major';
-        }
-        return 'minor';
-      }
-
-      if (
-        status === 'not_installed' ||
-        status === 'invalid_installation' ||
-        status === 'unknown' ||
-        status === 'insufficient_efi_space'
-      ) {
-        return 'major';
-      }
-
-      return 'info';
-    };
 
     const nextItems: UpdateItem[] = [];
 
