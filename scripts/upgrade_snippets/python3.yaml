@@ -1,0 +1,58 @@
+# Python 3 (system interpreter) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-07-07
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Updates the system CPython interpreter through apt (the `python3` package) —
+# the channel it is installed from on Debian/Ubuntu.
+#
+# NOTE: `python3` is a core system package that also moves during a normal
+# `apt upgrade`, so this overlaps the APT snippet; it exists to surface the
+# interpreter as its own dashboard entry and to allow a targeted upgrade.
+# Compares apt's view of the package on BOTH sides — `python3 --version`
+# (e.g. 3.14.4) reports the interpreter build, which differs from the `python3`
+# metapackage version (e.g. 3.14.3) and would trip a false "update available".
+#
+# Version History:
+#   0.1.0-alpha (2026-07-07) - Initial alpha version, apt-based
+#
+# Reference: https://www.python.org/
+
+# Application identifiers
+application:
+  name: "python3"
+  command: "python3"
+  display_name: "Python 3 (system)"
+
+# Messages
+messages:
+  checking_updates: "Checking Python 3 (system interpreter) updates..."
+  install_help: |
+    Python 3 is provided by the base system:
+      sudo apt install python3     # Debian/Ubuntu
+      sudo pacman -S python        # Arch Linux
+  failed_version: "Failed to get current Python 3 version"
+  update_success: "Python 3 updated successfully"
+  installing: "Updating Python 3 via apt..."
+
+# Version extraction
+#   Read the apt-recorded installed version of the `python3` package with the
+#   trailing Debian revision stripped, so it is the same format as
+#   get_apt_latest_version (which strips the same `-N` revision from the
+#   candidate). Do NOT use `python3 --version` — it reports the interpreter
+#   build number, not the metapackage version, and would never match.
+version:
+  command: "apt-cache policy python3 | grep 'Installed:' | awk '{print $2}' | sed 's/-[^-]*$//'"
+  regex: '([0-9]+\.[0-9]+\.[0-9]+(\+[a-z0-9.~]+)?)'
+  source: "apt"
+  package_name: "python3"
+
+# Update configuration
+update:
+  method: "apt"
+  update_command: "sudo apt-get update && sudo apt-get install --only-upgrade -y python3"
+  output_lines: 15
+  requires_sudo: true
