@@ -569,6 +569,24 @@ websocketServer.on('connection', (socket) => {
   });
 });
 
+// A failed listen (most commonly EADDRINUSE when a backend is already running)
+// otherwise surfaces as an unhandled 'error' event that crashes with a stack
+// trace. Handle it on both the HTTP server and the ws server (ws re-emits the
+// server error) and exit cleanly with an actionable one-liner instead.
+const handleListenError = (error) => {
+  if (error && error.code === 'EADDRINUSE') {
+    console.error(
+      `sysupdate backend: ${HOST}:${PORT} is already in use — a backend bridge is likely already running.`,
+    );
+    console.error('Reuse it, or free the port (e.g. `pkill -f backend/server.js`), then retry.');
+  } else {
+    console.error(`sysupdate backend: failed to start — ${error?.message ?? error}`);
+  }
+  process.exit(1);
+};
+server.on('error', handleListenError);
+websocketServer.on('error', handleListenError);
+
 server.listen(PORT, HOST, () => {
   console.log(`sysupdate local backend bridge listening on http://${HOST}:${PORT}`);
 });
