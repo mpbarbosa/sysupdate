@@ -7,6 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOST="${SYSUPDATE_WEB_APP_HOST:-127.0.0.1}"
 APP_PORT="${SYSUPDATE_WEB_APP_PORT:-5173}"
 APP_URL="${SYSUPDATE_WEB_APP_URL:-http://${APP_HOST}:${APP_PORT}}"
+# Backend bridge bind address — must match backend/server.js defaults so we can
+# detect an already-running backend before spawning a second one.
+BACKEND_HOST="${SYSUPDATE_WEB_HOST:-127.0.0.1}"
+BACKEND_PORT="${SYSUPDATE_WEB_PORT:-4174}"
 INTERACTIVE_MODE=false
 BACKEND_PID=""
 DEV_PID=""
@@ -129,6 +133,21 @@ open_browser() {
     fi
 }
 
+# True when something is already listening on TCP <port>. Tries lsof, then ss,
+# then a portable /dev/tcp connect as a last resort.
+backend_port_in_use() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$port" -sTCP:LISTEN -Pn >/dev/null 2>&1
+        return
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+    (exec 3<>"/dev/tcp/${BACKEND_HOST}/${port}") 2>/dev/null
+}
+
 ensure_process_running() {
     local pid="$1"
     local service_name="$2"
@@ -172,9 +191,14 @@ echo "Building web app..."
 npm run build
 
 echo "Starting backend..."
-npm run backend &
-BACKEND_PID=$!
-ensure_process_running "$BACKEND_PID" "Backend service"
+if backend_port_in_use "$BACKEND_PORT"; then
+    echo "A backend bridge is already listening on ${BACKEND_HOST}:${BACKEND_PORT} — reusing it (not starting a second one)."
+    # Leave BACKEND_PID empty so cleanup() won't kill a backend this script didn't start.
+else
+    npm run backend &
+    BACKEND_PID=$!
+    ensure_process_running "$BACKEND_PID" "Backend service"
+fi
 
 echo "Starting Vite dev server..."
 npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort &
