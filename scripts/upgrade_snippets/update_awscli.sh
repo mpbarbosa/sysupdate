@@ -29,7 +29,19 @@ perform_awscli_install_or_update() {
     local success_msg
     success_msg=$(get_config "messages.update_success")
     local previous_version="${CURRENT_VERSION:-}"
-    
+
+    # Preflight: the AWS CLI installer writes to /usr/local/aws-cli and needs
+    # root. In a non-interactive context (e.g. the web dashboard) with no cached
+    # sudo credentials this cannot succeed, so bail before the ~70 MB download
+    # rather than wasting it and failing on the install. Emitting sudo.required
+    # lets the UI prompt for re-authentication.
+    if ! sudo_can_run; then
+        emit_sudo_required_event "aws/install --update (${APP_DISPLAY_NAME:-AWS CLI})" "false"
+        print_error "Sudo credentials required to install/update ${APP_DISPLAY_NAME:-AWS CLI}"
+        print_error "Re-run in an interactive terminal, or launch the dashboard with 'run_app.sh -i', to allow sudo installs"
+        return 1
+    fi
+
     print_status "$download_msg"
     
     local temp_dir
