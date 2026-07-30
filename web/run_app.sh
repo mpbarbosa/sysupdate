@@ -135,8 +135,9 @@ open_browser() {
 
 # True when something is already listening on TCP <port>. Tries lsof, then ss,
 # then a portable /dev/tcp connect as a last resort.
-backend_port_in_use() {
+port_in_use() {
     local port="$1"
+    local host="${2:-127.0.0.1}"
     if command -v lsof >/dev/null 2>&1; then
         lsof -iTCP:"$port" -sTCP:LISTEN -Pn >/dev/null 2>&1
         return
@@ -145,7 +146,7 @@ backend_port_in_use() {
         ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
         return
     fi
-    (exec 3<>"/dev/tcp/${BACKEND_HOST}/${port}") 2>/dev/null
+    (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null
 }
 
 ensure_process_running() {
@@ -191,7 +192,7 @@ echo "Building web app..."
 npm run build
 
 echo "Starting backend..."
-if backend_port_in_use "$BACKEND_PORT"; then
+if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
     echo "A backend bridge is already listening on ${BACKEND_HOST}:${BACKEND_PORT} — reusing it (not starting a second one)."
     # Leave BACKEND_PID empty so cleanup() won't kill a backend this script didn't start.
 else
@@ -201,9 +202,14 @@ else
 fi
 
 echo "Starting Vite dev server..."
-npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort &
-DEV_PID=$!
-ensure_process_running "$DEV_PID" "Vite dev server"
+if port_in_use "$APP_PORT" "$APP_HOST"; then
+    echo "A dev server is already listening on ${APP_HOST}:${APP_PORT} — reusing it (not starting a second one)."
+    # Leave DEV_PID empty so cleanup() won't kill a dev server this script didn't start.
+else
+    npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort &
+    DEV_PID=$!
+    ensure_process_running "$DEV_PID" "Vite dev server"
+fi
 
 echo "Waiting for web app at $APP_URL..."
 if wait_for_url "$APP_URL"; then
@@ -213,4 +219,9 @@ else
     echo "Web app did not become ready in time. Open it manually at: $APP_URL"
 fi
 
-wait "$DEV_PID"
+# Foreground on the dev server if this script started it. If it (and the backend)
+# were already running, there's nothing of ours to wait on — the servers keep
+# running independently and the script exits after opening the browser.
+if [ -n "$DEV_PID" ]; then
+    wait "$DEV_PID"
+fi
