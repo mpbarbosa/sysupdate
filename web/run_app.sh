@@ -30,6 +30,8 @@ Options:
                         alive for the whole session, so package updates
                         triggered from the dashboard (which the backend runs
                         without a TTY) can install without failing on sudo.
+                        A backend already running from an earlier session is
+                        restarted so it inherits these credentials.
     -h, --help          Show this help message and exit
 
 Environment variables:
@@ -193,8 +195,24 @@ npm run build
 
 echo "Starting backend..."
 if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
-    echo "A backend bridge is already listening on ${BACKEND_HOST}:${BACKEND_PORT} — reusing it (not starting a second one)."
-    # Leave BACKEND_PID empty so cleanup() won't kill a backend this script didn't start.
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        # -i exists to give the backend sudo access for dashboard-triggered
+        # installs. A backend left from an earlier (non-authenticated) session
+        # would not have those credentials, so replace it with one spawned under
+        # this sudo-authenticated session instead of reusing it.
+        echo "Interactive mode: restarting the backend on ${BACKEND_HOST}:${BACKEND_PORT} so it inherits this session's sudo credentials..."
+        pkill -f "backend/server.js" 2>/dev/null || true
+        for _ in 1 2 3 4 5; do
+            port_in_use "$BACKEND_PORT" "$BACKEND_HOST" || break
+            sleep 1
+        done
+        npm run backend &
+        BACKEND_PID=$!
+        ensure_process_running "$BACKEND_PID" "Backend service"
+    else
+        echo "A backend bridge is already listening on ${BACKEND_HOST}:${BACKEND_PORT} — reusing it (not starting a second one)."
+        # Leave BACKEND_PID empty so cleanup() won't kill a backend this script didn't start.
+    fi
 else
     npm run backend &
     BACKEND_PID=$!
