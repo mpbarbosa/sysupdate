@@ -387,10 +387,29 @@ perform_hyprland_update() {
 update_hyprland() {
     # Perform config-driven version check
     if ! config_driven_version_check; then
+        # If Hyprland is installed but its version can't be read (a broken binary
+        # — e.g. missing/incompatible shared libraries after a system upgrade), a
+        # rebuild is exactly what repairs it. Offer one instead of just bailing.
+        local app_cmd
+        app_cmd=$(get_config "application.command")
+        if command -v "${app_cmd:-Hyprland}" >/dev/null 2>&1; then
+            print_warning "${APP_DISPLAY_NAME:-Hyprland} is installed but its version could not be read — the binary may be broken (e.g. missing shared libraries)."
+            if [ "${CHECK_ONLY_MODE:-false}" = true ]; then
+                print_status "Check-only mode - a rebuild (skipped here) would repair it"
+                ask_continue
+                return 0
+            fi
+            if prompt_yes_no "Rebuild/reinstall ${APP_DISPLAY_NAME:-Hyprland} to repair it?"; then
+                local repair_version
+                repair_version=$(get_github_latest_version \
+                    "$(get_config version.github_owner)" "$(get_config version.github_repo)")
+                perform_hyprland_update "$repair_version"
+            fi
+        fi
         ask_continue
         return 0
     fi
-    
+
     # Handle update workflow with custom perform_hyprland_update logic
     if ! handle_update_prompt "$APP_DISPLAY_NAME" "$VERSION_STATUS" \
         "perform_hyprland_update '$LATEST_VERSION'"; then

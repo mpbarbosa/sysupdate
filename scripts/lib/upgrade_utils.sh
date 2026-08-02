@@ -67,8 +67,17 @@ get_current_version_from_config() {
         return 1
     fi
 
+    # When VERSION_CMD_STDERR_FILE is set (by config_driven_version_check), capture
+    # the version command's stderr there so an actionable failure cause — e.g. a
+    # broken binary's "libX.so: cannot open shared object file" — can be surfaced
+    # instead of silently swallowed. Command substitution runs in a subshell, so a
+    # file (not a variable) is used to carry the error back to the caller.
     local version_output
-    version_output=$(eval "$version_cmd" 2>/dev/null | head -1)
+    if [ -n "${VERSION_CMD_STDERR_FILE:-}" ]; then
+        version_output=$(eval "$version_cmd" 2>"$VERSION_CMD_STDERR_FILE" | head -1)
+    else
+        version_output=$(eval "$version_cmd" 2>/dev/null | head -1)
+    fi
     local current_version
     current_version=$(extract_version "$version_output" "$version_regex")
 
@@ -110,9 +119,17 @@ config_driven_version_check() {
         return 1
     fi
     
-    # Get current version
+    # Get current version, capturing the version command's stderr so we can show
+    # WHY it failed (e.g. a broken binary) rather than a bare "failed" message.
+    local version_cmd_stderr
+    VERSION_CMD_STDERR_FILE=$(mktemp 2>/dev/null || echo "")
     CURRENT_VERSION=$(get_current_version_from_config)
-    
+    if [ -n "$VERSION_CMD_STDERR_FILE" ]; then
+        version_cmd_stderr=$(head -3 "$VERSION_CMD_STDERR_FILE" 2>/dev/null)
+        rm -f "$VERSION_CMD_STDERR_FILE"
+    fi
+    VERSION_CMD_STDERR_FILE=""
+
     if [ -z "$CURRENT_VERSION" ]; then
         local error_msg
         error_msg=$(get_config "messages.failed_version")
@@ -121,6 +138,13 @@ config_driven_version_check() {
         fi
         emit_summary_event "version_check" "target" "$APP_DISPLAY_NAME" "status" "unknown" "current_version" "unknown" "latest_version" "unknown"
         print_error "$error_msg"
+        # Surface the underlying cause (missing shared library, crash, etc.) so the
+        # failure is actionable instead of a mysterious "unknown → unknown".
+        if [ -n "${version_cmd_stderr:-}" ]; then
+            while IFS= read -r _line; do
+                [ -n "$_line" ] && print_error "  ↳ $_line"
+            done <<< "$version_cmd_stderr"
+        fi
         ask_continue
         return 1
     fi
