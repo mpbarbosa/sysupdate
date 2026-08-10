@@ -20,8 +20,14 @@
 #
 # Run with sudo:
 #   sudo bash setup-hyprland-alternatives.sh [--ref <tag>] [--jobs N]
-#   sudo bash setup-hyprland-alternatives.sh --skip-build   # register only (upstream already in /opt/hyprland)
-#   sudo bash setup-hyprland-alternatives.sh --remove       # tear the group down (leaves both installs)
+#   sudo bash setup-hyprland-alternatives.sh --with-deps      # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
+#   sudo bash setup-hyprland-alternatives.sh --with-deps=hyprutils,hyprgraphics  # custom dep list
+#   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
+#   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
+#
+# --with-deps builds the latest release of each named hyprwm/<dep> from source into
+# /opt/hyprland (RPATH-isolated) BEFORE building Hyprland, for when apt's hypr* libs
+# are too old (e.g. hyprutils 0.11 vs the >=0.14 recent Hyprland needs) or absent.
 #
 # Idempotent: safe to re-run (rebuilds /opt/hyprland and re-registers alternatives).
 set -euo pipefail
@@ -40,6 +46,12 @@ REF=""                               # git ref to build (default: latest release
 JOBS="$(nproc 2>/dev/null || echo 2)"
 SKIP_BUILD=false
 DO_REMOVE=false
+WITH_DEPS=""                          # hypr* deps to build from source into $DEST (space/comma list)
+DEPS_DEFAULT="hyprutils hyprgraphics" # not packaged (or too old) in apt for recent Hyprland
+
+# pkg-config + cmake search paths for anything we build into the isolated prefix,
+# so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
+DEST_PKGCFG="$DEST/lib/pkgconfig:$DEST/lib/x86_64-linux-gnu/pkgconfig:$DEST/share/pkgconfig"
 
 #-------------------------- arg parsing --------------------------
 while [ $# -gt 0 ]; do
@@ -48,17 +60,66 @@ while [ $# -gt 0 ]; do
         --jobs)         JOBS="${2:-}"; shift 2 ;;
         --skip-build)   SKIP_BUILD=true; shift ;;
         --remove)       DO_REMOVE=true; shift ;;
+        --with-deps)    WITH_DEPS="$DEPS_DEFAULT"; shift ;;
+        --with-deps=*)  WITH_DEPS="${1#*=}"; shift ;;
         -h|--help)
-            sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "error: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+WITH_DEPS="${WITH_DEPS//,/ }"        # accept comma- or space-separated lists
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run with sudo: sudo bash $0 [--ref <tag>] [--skip-build] [--remove]" >&2
     exit 1
 fi
+
+#-------------------------- build a hypr* dependency into $DEST --------------------------
+# Recent Hyprland needs hypr* libraries (hyprutils, hyprgraphics, ...) newer than
+# Ubuntu packages — or not packaged at all. Build the latest release of each into
+# the isolated $DEST prefix (with RPATH), so Hyprland links OUR copies and they
+# never collide with /usr/lib. Deps are built in the given order; earlier ones are
+# visible (via PKG_CONFIG_PATH) to later ones.
+build_hypr_dep() {
+    local name="$1"
+    local repo="https://github.com/hyprwm/$name.git"
+
+    local ref
+    ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
+             | awk -F/ '{print $NF}' \
+             | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+             | sort -V | tail -1)"
+    [ -n "$ref" ] || { echo "error: could not resolve a release tag for '$name' (typo? no such hyprwm repo?)" >&2; return 1; }
+
+    echo "==> Building dependency $name $ref into $DEST"
+    local d
+    d="$(mktemp -d "/tmp/${name}-build-XXXXXX")"
+
+    # Silence stdout from git clone but preserve stderr so users see the root cause of failures
+    if ! git clone --recursive --depth 1 --branch "$ref" "$repo" "$d/src" >/dev/null; then
+        echo "error: clone of $name $ref failed" >&2; rm -rf "$d"; return 1
+    fi
+    if ! PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
+         cmake --no-warn-unused-cli \
+            -DCMAKE_BUILD_TYPE:STRING=Release \
+            -DCMAKE_INSTALL_PREFIX:PATH="$DEST" \
+            -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \
+            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+            -DCMAKE_PREFIX_PATH="$DEST" \
+            -B "$d/build" -S "$d/src"; then
+        echo "error: cmake configure for '$name' failed — it likely has its own unmet -dev deps (see output above)" >&2
+        rm -rf "$d"; return 1
+    fi
+    if ! cmake --build "$d/build" -j"$JOBS"; then
+        echo "error: build of '$name' failed (see output above)" >&2; rm -rf "$d"; return 1
+    fi
+    if ! cmake --install "$d/build"; then
+        echo "error: install of '$name' into $DEST failed" >&2; rm -rf "$d"; return 1
+    fi
+    rm -rf "$d"
+    echo "    installed $name $ref -> $DEST"
+}
 
 #-------------------------- --remove --------------------------
 if [ "$DO_REMOVE" = true ]; then
@@ -82,6 +143,21 @@ if [ "$SKIP_BUILD" = false ]; then
                  | sort -V | tail -1)"
         [ -n "$REF" ] || { echo "error: could not resolve latest Hyprland tag; pass --ref <tag>" >&2; exit 1; }
     fi
+
+    # Fresh isolated prefix, then build any requested hypr* deps into it FIRST so
+    # the Hyprland configure below finds them (via PKG_CONFIG_PATH) instead of apt's.
+    echo "==> Preparing isolated prefix $DEST"
+    rm -rf "$DEST"
+    if [ -n "$WITH_DEPS" ]; then
+        echo "==> Building hypr* dependencies into $DEST: $WITH_DEPS"
+        for dep in $WITH_DEPS; do
+            build_hypr_dep "$dep" || {
+                echo "error: dependency '$dep' could not be built; install its -dev deps and re-run" >&2
+                exit 1
+            }
+        done
+    fi
+
     echo "==> Building upstream Hyprland $REF into $DEST (isolated prefix)"
 
     build_root="$(mktemp -d /tmp/hyprland-build-XXXXXX)"
@@ -96,11 +172,13 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "    configuring (CMake, prefix=$DEST, RPATH=$DEST/lib) ..."
     # errexit off around the build so we can give an actionable dependency message.
     set +e
+    PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
     cmake --no-warn-unused-cli \
         -DCMAKE_BUILD_TYPE:STRING=Release \
         -DCMAKE_INSTALL_PREFIX:PATH="$DEST" \
         -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+        -DCMAKE_PREFIX_PATH="$DEST" \
         -B "$build_root/build" -S "$build_root/src"
     cfg_rc=$?
     if [ $cfg_rc -ne 0 ]; then
@@ -110,8 +188,11 @@ error: CMake configuration failed — the Hyprland dependency chain is not satis
        Building upstream $REF needs matching versions of the hypr* stack, e.g.:
          hyprutils, hyprlang, hyprcursor, hyprgraphics, hyprwayland-scanner,
          aquamarine, hyprland-protocols  (plus wayland/xkbcommon/pixman/cairo/pango/drm)
-       Install the newer -dev packages (if your distro has them) or build that
-       stack into $DEST first, then re-run with --skip-build.
+       If a hypr* library is too old or missing in apt (a "requires >= X" or
+       "not found" pkg-config error above), build it from source into $DEST:
+         sudo bash $0 --with-deps                       # builds: $DEPS_DEFAULT
+         sudo bash $0 --with-deps=hyprutils,hyprgraphics # or a custom list
+       If instead a plain -dev package is missing, apt-install it and re-run.
        Upstream build docs: https://wiki.hyprland.org/Getting-Started/Installation/#manual-manual-build
 EOF
         exit 1
@@ -127,7 +208,7 @@ EOF
     fi
 
     echo "    installing into $DEST ..."
-    rm -rf "$DEST"
+    # NB: do NOT rm -rf "$DEST" here — it now holds the hypr* deps we built above.
     cmake --install "$build_root/build"
     inst_rc=$?
     set -e

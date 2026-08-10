@@ -48,12 +48,28 @@ A ready-to-run, idempotent implementation lives at [`scripts/setup-hyprland-alte
 
 ```bash
 sudo bash scripts/setup-hyprland-alternatives.sh              # build upstream latest into /opt/hyprland + register alternatives
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps  # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
 sudo bash scripts/setup-hyprland-alternatives.sh --ref v0.56.2
 sudo bash scripts/setup-hyprland-alternatives.sh --skip-build # register only (upstream already in /opt/hyprland)
 sudo bash scripts/setup-hyprland-alternatives.sh --remove     # tear the group down (leaves both installs in place)
 ```
 
-The script **only registers alternatives deterministically**; the source build is best-effort and aborts with an explicit "install these `-dev` packages" message if the `hypr*` dependency chain isn't satisfiable, rather than producing a silently-broken binary.
+The script **registers alternatives deterministically**; the source build aborts with an explicit, actionable message (install a `-dev` package, or pass `--with-deps`) if a dependency isn't satisfiable, rather than producing a silently-broken binary.
+
+### Dependency chain (measured 2026-08-10, building upstream v0.56.2 on Ubuntu resolute)
+
+Configuring v0.56.2 on this system resolved almost everything from apt and surfaced exactly the gaps below (CMake stops at the first miss, so it's iterative):
+
+| Dependency | apt provides | v0.56.2 needs | Action |
+| --- | --- | --- | --- |
+| `glslang` (cmake config) | `glslang-dev` | present | `sudo apt install glslang-dev` |
+| `aquamarine` | 0.9.3 | ≥ 0.9.3 | ✅ apt |
+| `hyprlang` | 0.6.7 | ≥ 0.6.7 | ✅ apt |
+| `hyprcursor` | 0.1.13 | ≥ 0.1.7 | ✅ apt |
+| **`hyprutils`** | **0.11.0** | **≥ 0.14.0** | ❌ too old → `--with-deps` builds it |
+| `hyprgraphics` | *(not packaged)* | required | ❌ → `--with-deps` builds it |
+
+So the working invocation here is **`sudo bash scripts/setup-hyprland-alternatives.sh --with-deps`** (which builds `hyprutils` + `hyprgraphics` into `/opt/hyprland` first). `--with-deps` builds each `hyprwm/<dep>` latest release into the isolated prefix with RPATH, ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
 ## Caveats (these decide whether it's worth it)
 
