@@ -96,7 +96,8 @@ build_hypr_dep() {
     local d
     d="$(mktemp -d "/tmp/${name}-build-XXXXXX")"
 
-    if ! git clone --recursive --depth 1 --branch "$ref" "$repo" "$d/src" >/dev/null 2>&1; then
+    # Silence stdout from git clone but preserve stderr so users see the root cause of failures
+    if ! git clone --recursive --depth 1 --branch "$ref" "$repo" "$d/src" >/dev/null; then
         echo "error: clone of $name $ref failed" >&2; rm -rf "$d"; return 1
     fi
     if ! PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
