@@ -44,7 +44,7 @@ sudo update-alternatives --config kitty      # interactively switch
 
 ## Recommendation
 
-- **Use `update-alternatives`** if you want a root-managed, prioritized, `--config`-switchable, **system-wide** selection (or multi-user, or to integrate with `x-terminal-emulator`). Feasible via the `/usr/local/bin` link + kitty/kitten group + upstream in `/opt`.
+- **Use `update-alternatives`** if you want a root-managed, prioritized, `--config`-switchable, **system-wide** selection (or multi-user, or to integrate with `x-terminal-emulator`). Feasible via the `/usr/local/bin` link + kitty/kitten group + upstream in `/opt`. A ready-to-run, idempotent implementation lives at [`scripts/setup-kitty-alternatives.sh`](../scripts/setup-kitty-alternatives.sh) — run `sudo bash scripts/setup-kitty-alternatives.sh`.
 - **Skip it** if this is just you flipping between two kitties: a single symlink in `~/.local/bin` (or `/usr/local/bin`) to the one you want, or PATH ordering, achieves the same with **no root, no dpkg friction, and none of the manual-cleanup/home-path caveats**.
 - Either way, reconcile the `kitty` snippet's channel with whichever install you consider "the one to update."
 
