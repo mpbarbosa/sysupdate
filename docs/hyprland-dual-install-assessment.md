@@ -68,8 +68,18 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 | `hyprcursor` | 0.1.13 | ≥ 0.1.7 | ✅ apt |
 | **`hyprutils`** | **0.11.0** | **≥ 0.14.0** | ❌ too old → `--with-deps` builds it |
 | `hyprgraphics` | *(not packaged)* | required | ❌ → `--with-deps` builds it |
+| `libinput` | 1.31.1 (`libinput-dev`) | ≥ 1.29 | `sudo apt install libinput-dev` |
+| `libeis-1.0` | 1.5.0 (`libeis-dev`) | required | `sudo apt install libeis-dev` |
+| **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` builds it (meson) |
 
-So the working invocation here is **`sudo bash scripts/setup-hyprland-alternatives.sh --with-deps`** (which builds `hyprutils` + `hyprgraphics` into `/opt/hyprland` first). `--with-deps` builds each `hyprwm/<dep>` latest release into the isolated prefix with RPATH, ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
+So the working sequence here is:
+
+```bash
+sudo apt install glslang-dev libinput-dev libeis-dev
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
+```
+
+`--with-deps` (default list: `hyprutils hyprgraphics wayland-protocols`) builds each dependency's latest release into the isolated prefix — `hyprwm/<dep>` via CMake with RPATH, `wayland-protocols` via meson — ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
 ## Caveats (these decide whether it's worth it)
 
