@@ -1,13 +1,18 @@
 # Hyprland Update Configuration
 # Upgrade script for Hyprland wayland compositor
 #
-# Version: 1.0.0-alpha
-# Date: 2025-12-14
+# Version: 1.1.0-alpha
+# Date: 2026-08-10
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   1.1.0-alpha (2026-08-10) - update-alternatives-aware: when Hyprland is managed
+#                            - by an alternatives group (scripts/setup-hyprland-alternatives.sh),
+#                            - the upstream candidate is refreshed in its isolated
+#                            - /opt/hyprland prefix via that setup script — never a
+#                            - /usr/local source build, never touching the apt build.
 #   1.0.0-alpha (2025-12-14) - Initial version for Hyprland compositor
 #                            - Supports source builds and git updates
 #                            - Three update methods: package, git, source
@@ -19,12 +24,19 @@ application:
   command: "Hyprland"
 
 # Version extraction
+# Note: version.command reads whichever build is ACTIVE (`Hyprland --version`).
+# Under update-alternatives that is the selected candidate; version.source stays
+# github because this snippet manages the UPSTREAM build.
 version:
   command: "Hyprland --version"
   regex: '^Hyprland ([0-9]+\.[0-9]+\.[0-9]+).*'
   source: "github"
   github_owner: "hyprwm"
   github_repo: "Hyprland"
+
+# Update behavior (used by the update-alternatives-aware path)
+update:
+  output_lines: 40
 
 # Messages
 messages:
