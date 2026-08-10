@@ -382,6 +382,99 @@ perform_hyprland_update() {
     fi
 }
 
+#=============================================================================
+# update-alternatives-aware update path
+#
+# When Hyprland is managed by an update-alternatives group (the two-install
+# setup from scripts/setup-hyprland-alternatives.sh: apt /usr/bin/Hyprland +
+# upstream /opt/hyprland behind a /usr/local/bin generic link), an update must
+# refresh the UPSTREAM candidate in place at its isolated prefix — never the apt
+# candidate, and never a /usr/local source build (that is what broke Hyprland
+# before; see docs/hyprland-status.md). We delegate the rebuild to the same
+# setup script so the isolated-prefix + RPATH logic stays single-sourced.
+#=============================================================================
+
+# Is Hyprland currently managed by an update-alternatives group?
+hyprland_is_alternatives_managed() {
+    command -v update-alternatives >/dev/null 2>&1 || return 1
+    update-alternatives --query Hyprland >/dev/null 2>&1
+}
+
+# Print the currently active alternative value (resolved binary), or "".
+hyprland_alt_active_value() {
+    update-alternatives --query Hyprland 2>/dev/null | awk '/^Value: /{print $2}'
+}
+
+# Print the upstream (non-apt) alternative target path, or "".
+# Prefers the /opt/hyprland layout; falls back to any non-/usr/bin candidate.
+hyprland_alt_upstream_target() {
+    local candidates
+    candidates=$(update-alternatives --query Hyprland 2>/dev/null \
+                   | awk '/^Alternative: /{print $2}' \
+                   | grep -v '^/usr/bin/Hyprland$')
+    printf '%s\n' "$candidates" | grep '/opt/hyprland/bin/Hyprland$' | head -1 && return 0
+    printf '%s\n' "$candidates" | grep -v '^$' | head -1
+}
+
+# Update the upstream Hyprland build behind update-alternatives by rebuilding it
+# at the latest release into its isolated prefix (via setup-hyprland-alternatives.sh),
+# then make it the active selection.
+perform_hyprland_alternatives_update() {
+    local latest_version="$1"
+
+    local target
+    target=$(hyprland_alt_upstream_target)
+    if [ -z "$target" ]; then
+        print_error "Could not resolve the upstream Hyprland target from update-alternatives"
+        return 1
+    fi
+
+    local setup_script="$HYPRLAND_SCRIPT_DIR/../setup-hyprland-alternatives.sh"
+    if [ ! -f "$setup_script" ]; then
+        print_error "Setup script not found: $setup_script"
+        return 1
+    fi
+
+    # The rebuild writes under /opt and update-alternatives needs root. Bail early
+    # in a non-interactive context with no cached credentials so the UI can prompt.
+    if ! sudo_can_run; then
+        emit_sudo_required_event "bash setup-hyprland-alternatives.sh --ref v$latest_version" "false"
+        print_error "Sudo credentials required to rebuild the upstream Hyprland at /opt/hyprland"
+        print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
+        return 1
+    fi
+
+    local output_lines
+    output_lines=$(get_config "update.output_lines")
+    output_lines="${output_lines:-40}"
+
+    local ref="v$latest_version"
+    print_status "Rebuilding upstream Hyprland ($ref) into the isolated /opt prefix via setup-hyprland-alternatives.sh..."
+    local out rc
+    out=$(run_with_sudo bash "$setup_script" --ref "$ref" 2>&1)
+    rc=$?
+    emit_captured_output "$out" "$output_lines"
+    if [ "$rc" -ne 0 ]; then
+        print_error "Upstream Hyprland rebuild failed"
+        return 1
+    fi
+
+    # Make the freshly-rebuilt upstream active if it isn't (e.g. apt was selected).
+    local active
+    active=$(hyprland_alt_active_value)
+    if [ "$active" != "$target" ]; then
+        print_status "Switching active Hyprland to the updated upstream build..."
+        run_with_sudo update-alternatives --set Hyprland "$target" >/dev/null 2>&1 || \
+            print_warning "Could not switch the active Hyprland selection to $target"
+    fi
+
+    hash -r 2>/dev/null || true
+
+    local success_msg
+    success_msg=$(get_config "messages.update.update_success")
+    verify_configured_update_result "$CURRENT_VERSION" "$LATEST_VERSION" "${success_msg:-Hyprland update completed}"
+}
+
 # Update Hyprland wayland compositor
 # Uses Method 3: Custom Update Logic (see upgrade_script_pattern_documentation.md)
 update_hyprland() {
@@ -403,16 +496,26 @@ update_hyprland() {
                 local repair_version
                 repair_version=$(get_github_latest_version \
                     "$(get_config version.github_owner)" "$(get_config version.github_repo)")
-                perform_hyprland_update "$repair_version"
+                # Under update-alternatives, repair the isolated /opt upstream build,
+                # not a /usr/local source build.
+                if hyprland_is_alternatives_managed; then
+                    perform_hyprland_alternatives_update "$repair_version"
+                else
+                    perform_hyprland_update "$repair_version"
+                fi
             fi
         fi
         ask_continue
         return 0
     fi
 
-    # Handle update workflow with custom perform_hyprland_update logic
-    if ! handle_update_prompt "$APP_DISPLAY_NAME" "$VERSION_STATUS" \
-        "perform_hyprland_update '$LATEST_VERSION'"; then
+    # Handle update workflow. Under update-alternatives, refresh the isolated /opt
+    # upstream candidate in place; otherwise fall back to the legacy method chooser.
+    local update_callback="perform_hyprland_update '$LATEST_VERSION'"
+    if hyprland_is_alternatives_managed; then
+        update_callback="perform_hyprland_alternatives_update '$LATEST_VERSION'"
+    fi
+    if ! handle_update_prompt "$APP_DISPLAY_NAME" "$VERSION_STATUS" "$update_callback"; then
         ask_continue
         return 1
     fi
