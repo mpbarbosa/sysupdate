@@ -1,15 +1,24 @@
 # Kitty Terminal Update Configuration
-# 
-# Version: 0.1.0-alpha
-# Date: 2025-11-25
+#
+# Version: 0.2.0-alpha
+# Date: 2026-08-10
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   0.2.0-alpha (2026-08-10) - Aligned with the update-alternatives-aware snippet.
+#                            - When kitty is managed by update-alternatives, the
+#                              snippet refreshes the upstream build in place at its
+#                              alternative target (installer_url is reused for that);
+#                              no apt purge, no ~/.local/bin symlink.
 #   0.1.0-alpha (2025-11-25) - Initial alpha version with externalized configuration
 #                            - Migrated from hardcoded check_kitty_update.sh
 #                            - Not ready for production use
+#
+# Note: version.command reads whichever build is ACTIVE (`kitty --version`). Under
+# update-alternatives that is the selected candidate; version.source stays github
+# because this snippet manages the UPSTREAM build (see scripts/setup-kitty-alternatives.sh).
 
 # Application identifiers
 application:
