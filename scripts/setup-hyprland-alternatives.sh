@@ -25,9 +25,11 @@
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
 #
-# --with-deps builds the latest release of each named hyprwm/<dep> from source into
-# /opt/hyprland (RPATH-isolated) BEFORE building Hyprland, for when apt's hypr* libs
-# are too old (e.g. hyprutils 0.11 vs the >=0.14 recent Hyprland needs) or absent.
+# --with-deps builds the latest release of each named dep from source into
+# /opt/hyprland (RPATH-isolated) BEFORE building Hyprland, for when apt's copy is
+# too old or absent. Default list: hyprutils, hyprgraphics (hyprwm/<dep>, CMake)
+# and wayland-protocols (freedesktop, meson — apt has 1.47, Hyprland needs >=1.49).
+# Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev.
 #
 # Idempotent: safe to re-run (rebuilds /opt/hyprland and re-registers alternatives).
 set -euo pipefail
@@ -46,8 +48,10 @@ REF=""                               # git ref to build (default: latest release
 JOBS="$(nproc 2>/dev/null || echo 2)"
 SKIP_BUILD=false
 DO_REMOVE=false
-WITH_DEPS=""                          # hypr* deps to build from source into $DEST (space/comma list)
-DEPS_DEFAULT="hyprutils hyprgraphics" # not packaged (or too old) in apt for recent Hyprland
+WITH_DEPS=""                          # deps to build from source into $DEST (space/comma list)
+# Not packaged (or too old) in apt for recent Hyprland on Ubuntu: the hypr* libs
+# plus wayland-protocols (apt ships 1.47; recent Hyprland needs >= 1.49).
+DEPS_DEFAULT="hyprutils hyprgraphics wayland-protocols"
 
 # pkg-config + cmake search paths for anything we build into the isolated prefix,
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
@@ -63,7 +67,7 @@ while [ $# -gt 0 ]; do
         --with-deps)    WITH_DEPS="$DEPS_DEFAULT"; shift ;;
         --with-deps=*)  WITH_DEPS="${1#*=}"; shift ;;
         -h|--help)
-            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "error: unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -121,6 +125,47 @@ build_hypr_dep() {
     echo "    installed $name $ref -> $DEST"
 }
 
+# Build freedesktop wayland-protocols (meson, not a hyprwm/cmake project) into
+# $DEST. apt ships 1.47; recent Hyprland needs >= 1.49. It installs only data
+# (protocol XML + an arch-independent .pc), so this is a quick, compile-free build.
+build_wayland_protocols() {
+    command -v meson >/dev/null 2>&1 || { echo "error: meson is required to build wayland-protocols" >&2; return 1; }
+    local repo="https://gitlab.freedesktop.org/wayland/wayland-protocols.git"
+
+    local ref
+    ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
+             | awk -F/ '{print $NF}' \
+             | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+             | sort -V | tail -1)"
+    [ -n "$ref" ] || { echo "error: could not resolve a wayland-protocols release tag" >&2; return 1; }
+
+    echo "==> Building wayland-protocols $ref into $DEST"
+    local d
+    d="$(mktemp -d "/tmp/wayland-protocols-build-XXXXXX")"
+
+    if ! git clone --depth 1 --branch "$ref" "$repo" "$d/src" >/dev/null; then
+        echo "error: clone of wayland-protocols $ref failed" >&2; rm -rf "$d"; return 1
+    fi
+    if ! PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
+         meson setup --prefix="$DEST" -Dtests=false "$d/build" "$d/src"; then
+        echo "error: meson setup for wayland-protocols failed (see output above)" >&2; rm -rf "$d"; return 1
+    fi
+    if ! meson install -C "$d/build" >/dev/null; then
+        echo "error: install of wayland-protocols into $DEST failed" >&2; rm -rf "$d"; return 1
+    fi
+    rm -rf "$d"
+    echo "    installed wayland-protocols $ref -> $DEST"
+}
+
+# Dispatch a dependency name to the right builder (hyprwm/cmake vs the special
+# non-hyprwm cases).
+build_one_dep() {
+    case "$1" in
+        wayland-protocols) build_wayland_protocols ;;
+        *)                 build_hypr_dep "$1" ;;
+    esac
+}
+
 #-------------------------- --remove --------------------------
 if [ "$DO_REMOVE" = true ]; then
     echo "==> Removing the 'Hyprland' alternatives group (installs are left in place)"
@@ -149,9 +194,9 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "==> Preparing isolated prefix $DEST"
     rm -rf "$DEST"
     if [ -n "$WITH_DEPS" ]; then
-        echo "==> Building hypr* dependencies into $DEST: $WITH_DEPS"
+        echo "==> Building dependencies into $DEST: $WITH_DEPS"
         for dep in $WITH_DEPS; do
-            build_hypr_dep "$dep" || {
+            build_one_dep "$dep" || {
                 echo "error: dependency '$dep' could not be built; install its -dev deps and re-run" >&2
                 exit 1
             }
