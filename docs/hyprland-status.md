@@ -1,8 +1,21 @@
-# Hyprland install status — BROKEN (shared-library ABI mismatch)
+# Hyprland install status — RESOLVED (was: shared-library ABI mismatch)
 
-**Status:** ❌ Broken — the installed Hyprland binaries cannot run.
-**Discovered:** 2026-07-29, via the sysupdate dashboard (Hyprland card showed `unknown → unknown`, "Failed to get current Hyprland version").
-**Scope:** This is a **system / installation** problem, not a sysupdate bug. sysupdate reports it faithfully.
+**Status:** ✅ Resolved as of 2026-08-10 — the broken `/usr/local` source build was replaced by the
+distro package (`apt` `hyprland 0.53.3+ds-4`, at `/usr/bin/Hyprland`), which runs clean
+(`Hyprland --version` → 0.53.3, no missing libraries).
+**Originally discovered:** 2026-07-29, via the sysupdate dashboard (Hyprland card showed
+`unknown → unknown`, "Failed to get current Hyprland version").
+**Scope:** This was a **system / installation** problem, not a sysupdate bug. sysupdate reported it
+faithfully.
+
+> **Coexistence option:** to run the newer **upstream** Hyprland (0.56.x) *alongside* the stable apt
+> build and switch between them via `update-alternatives`, see
+> [`hyprland-dual-install-assessment.md`](./hyprland-dual-install-assessment.md) and
+> [`scripts/setup-hyprland-alternatives.sh`](../scripts/setup-hyprland-alternatives.sh). The upstream
+> build must go in an isolated `/opt/hyprland` prefix precisely to avoid repeating the ABI mismatch
+> described below.
+
+The remainder of this document records the original breakage for reference.
 
 ---
 

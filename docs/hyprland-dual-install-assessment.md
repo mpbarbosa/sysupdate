@@ -1,0 +1,80 @@
+# Feasibility: two Hyprland installs switchable via `update-alternatives`
+
+**Question:** Can we keep two Hyprland versions configured with `update-alternatives` — one from **apt**, one built from the **upstream repo** — and switch between them? (The kitty treatment, applied to Hyprland.)
+
+**Verdict:** ⚠️ **Feasible, but materially harder and riskier than kitty.** kitty is a self-contained app bundle (two binaries, no system libraries). Hyprland is a compositor with its own shared-library stack (`hyprutils`, `hyprlang`, `hyprcursor`, `aquamarine`, …) plus plugins (`hyprpm`). Doing this safely requires **isolating the upstream build in its own `/opt/hyprland` prefix** so its libraries can never collide with apt's — that collision is exactly what broke Hyprland before (see [`hyprland-status.md`](./hyprland-status.md)).
+
+**Assessed:** 2026-08-10 (assessment + setup script; the source build itself needs `sudo` and must be run by the user).
+
+---
+
+## Current state (measured)
+
+| Install | Path | Version | Ownership |
+| --- | --- | --- | --- |
+| **apt** | `/usr/bin/Hyprland` (+ `hyprctl`, `hyprpm`, `start-hyprland`) | **0.53.3** (`0.53.3+ds-4`) | real files, **dpkg-owned** (pkg `hyprland`); libs under `/usr/lib/x86_64-linux-gnu/hyprland/` |
+| **upstream** | *(not yet installed)* → target `/opt/hyprland/bin/Hyprland` | **0.56.2** (latest github release) | to be built into an isolated prefix |
+
+- **Active now:** apt 0.53.3 (the earlier broken `/usr/local` source build is gone; the distro package replaced it and runs clean).
+- No `Hyprland` alternatives group exists; **`/usr/local/bin/Hyprland` is free** (and precedes `/usr/bin` in PATH).
+- apt is **3 minor releases behind** upstream (0.53.3 vs 0.56.2), which is the real motivation for coexistence: keep the stable distro build while running bleeding-edge upstream on demand.
+
+## Why this is harder than kitty (read before deciding)
+
+1. **It's a dependency *chain*, not one binary.** Building upstream 0.56.2 needs the matching 0.56-era `hyprutils`/`hyprlang`/`hyprcursor`/`aquamarine`/`hyprland-protocols`/`hyprwayland-scanner`. apt ships the 0.53.3-era versions. So a from-source 0.56.2 typically means building that whole `hypr*` stack too — into the same isolated prefix. This is the bulk of the work and the main fragility.
+2. **ABI isolation is mandatory.** The previous breakage was a `/usr/local` build linking `/usr/lib` sonames that a later `apt upgrade` replaced with an incompatible major. The mitigation here: install upstream **entirely under `/opt/hyprland`** (bin + lib + share) and bake an install RPATH (`-DCMAKE_INSTALL_RPATH=/opt/hyprland/lib`) so the upstream `Hyprland` resolves *its own* libraries, independent of apt. Never let it fall back to `/usr/lib` hypr* libs.
+3. **Runtime coupling beyond the binary.** Plugins (`hyprpm`), the wayland session file (`/usr/share/wayland-sessions/hyprland.desktop`), and `XDG_DATA_DIRS`/portal wiring may need the active build's `share/` on the path. Switching the binary via alternatives does **not** switch those automatically — document and handle at login-session level.
+4. **A running compositor cannot swap under itself.** `update-alternatives --config Hyprland` changes what the *next* login launches; it does not migrate a live session.
+
+## The design (mirrors kitty, adapted)
+
+- **Isolated upstream prefix:** build/install upstream into `/opt/hyprland` (unowned by dpkg), with RPATH so it's self-contained.
+- **Generic link in `/usr/local/bin`** (unowned, precedes `/usr/bin`), with **`Hyprland` as master** and **`hyprctl` + `hyprpm` as slaves** (they are released and version-locked together — never mix apt-`Hyprland` with upstream-`hyprctl`).
+
+```bash
+sudo update-alternatives --install /usr/local/bin/Hyprland Hyprland /usr/bin/Hyprland 53 \
+    --slave /usr/local/bin/hyprctl hyprctl /usr/bin/hyprctl \
+    --slave /usr/local/bin/hyprpm  hyprpm  /usr/bin/hyprpm
+sudo update-alternatives --install /usr/local/bin/Hyprland Hyprland /opt/hyprland/bin/Hyprland 56 \
+    --slave /usr/local/bin/hyprctl hyprctl /opt/hyprland/bin/hyprctl \
+    --slave /usr/local/bin/hyprpm  hyprpm  /opt/hyprland/bin/hyprpm
+sudo update-alternatives --config Hyprland      # interactively switch
+# or pin one: sudo update-alternatives --set Hyprland /opt/hyprland/bin/Hyprland
+```
+
+Priorities encode the versions (apt 53, upstream 56); in **auto** mode the higher priority (upstream) wins, matching the kitty arrangement.
+
+A ready-to-run, idempotent implementation lives at [`scripts/setup-hyprland-alternatives.sh`](../scripts/setup-hyprland-alternatives.sh):
+
+```bash
+sudo bash scripts/setup-hyprland-alternatives.sh              # build upstream latest into /opt/hyprland + register alternatives
+sudo bash scripts/setup-hyprland-alternatives.sh --ref v0.56.2
+sudo bash scripts/setup-hyprland-alternatives.sh --skip-build # register only (upstream already in /opt/hyprland)
+sudo bash scripts/setup-hyprland-alternatives.sh --remove     # tear the group down (leaves both installs in place)
+```
+
+The script **only registers alternatives deterministically**; the source build is best-effort and aborts with an explicit "install these `-dev` packages" message if the `hypr*` dependency chain isn't satisfiable, rather than producing a silently-broken binary.
+
+## Caveats (these decide whether it's worth it)
+
+1. **Maintenance burden is ongoing.** Every future upstream bump re-triggers the whole `hypr*` dependency-chain build. Unlike kitty's "copy the app bundle", there is no cheap refresh. Budget for it.
+2. **A future `apt upgrade` won't touch `/opt/hyprland`** (good — that's the isolation), but it *also* means the upstream build won't get security fixes automatically. You own its updates.
+3. **Manual cleanup on removal.** Because the alternatives are registered by hand, `apt remove hyprland` will **not** remove the `/usr/bin/Hyprland` entry — it would dangle. Remove it yourself (`sudo update-alternatives --remove Hyprland /usr/bin/Hyprland`) or run the setup script's `--remove`.
+4. **Session launcher.** Ensure `/usr/share/wayland-sessions/hyprland.desktop` (or your login manager) launches `Hyprland` via PATH (so `/usr/local/bin` wins) — or point it at `/usr/local/bin/Hyprland`. `start-hyprland` (apt) is a wrapper; if you rely on it, keep the apt build for session bring-up and switch only for manual runs.
+5. **sysupdate snippet.** `scripts/upgrade_snippets/hyprland.yaml` reads `Hyprland --version` (the active build) but `version.source: github`. Under alternatives that is honest for the active build, but the snippet must also stop steering apt installs toward a `/usr/local` source rebuild. The companion PR makes `update_hyprland.sh` alternatives-aware (refresh the `/opt/hyprland` candidate in place; never purge apt).
+
+## Recommendation
+
+- **Use `update-alternatives`** if you specifically want to run **upstream 0.56.2 alongside stable apt 0.53.3** with a root-managed, `--config`-switchable selection — accepting the dependency-chain build and its maintenance cost. The isolated `/opt/hyprland` prefix is what makes it safe.
+- **Skip it** if you just want the newest Hyprland: track upstream only (and drop the apt package), or stay on apt. The dual setup pays off only if you genuinely need *both* available and switchable.
+- Either way, the companion snippet change keeps sysupdate from pushing Hyprland back into the fragile `/usr/local` source build.
+
+## Verification (after setting it up)
+
+```bash
+update-alternatives --display Hyprland        # both links + which is active
+command -v Hyprland                            # -> /usr/local/bin/Hyprland (the generic link)
+Hyprland --version                             # the active version
+ldd /opt/hyprland/bin/Hyprland | grep -i hypr  # upstream libs must resolve under /opt/hyprland, not /usr/lib
+sudo update-alternatives --config Hyprland     # switch, log out/in, re-check `Hyprland --version`
+```
