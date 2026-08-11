@@ -86,10 +86,16 @@ sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
 > optional: apt's C++ libraries (re2, hyprutils, …) are built with GCC 15 and need its
 > libstdc++ (`GLIBCXX_3.4.34`). An older g++ (e.g. `g++-14`) links an older libstdc++ and
 > every apt C++ lib then fails to link (`undefined reference to …@GLIBCXX_3.4.34`).
-> GCC 15's new `-Wtemplate-body` *wrongly* rejects `std::ranges::starts_with` in a Hyprland
-> template body even though `<algorithm>` is included (a false positive; it resolves at
-> instantiation) — so the script passes **`-Wno-template-body`** when building Hyprland with
-> GCC. Use `--cxx clang++` only if you prefer clang (also libstdc++-based); never an older g++.
+> Use `--cxx clang++` only if you prefer clang (also libstdc++-based); never an older g++.
+>
+> **libstdc++ gap — `std::ranges::starts_with`:** Ubuntu resolute's libstdc++ (GCC 15.2)
+> does **not** implement `std::ranges::starts_with` (P1659) — `__cpp_lib_ranges_starts_ends_with`
+> is undefined and it's absent from `<algorithm>`. Hyprland 0.56.2 uses it in exactly one
+> spot (`helpers/MiscFunctions.cpp`). The script probes for the algorithm and, when missing,
+> patches that line to the equivalent C++20 member `std::string_view::starts_with` (identical
+> semantics, universally available). No-op once the stdlib gains the algorithm. This is also
+> why `-Wno-template-body` alone wasn't enough — the symbol is genuinely absent, not just
+> eagerly diagnosed; the script still passes `-Wno-template-body` as a harmless safety net.
 
 `--with-deps` (default list: `hyprutils wayland-protocols aquamarine hyprgraphics`) installs each dependency's latest release into the isolated prefix — `hyprwm/<dep>` built via CMake with RPATH, `wayland-protocols` copied in data-only — in an order where earlier deps are visible to later ones (hyprutils first; wayland-protocols before aquamarine), and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
