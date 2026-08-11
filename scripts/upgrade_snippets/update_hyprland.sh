@@ -438,7 +438,7 @@ perform_hyprland_alternatives_update() {
     # The rebuild writes under /opt and update-alternatives needs root. Bail early
     # in a non-interactive context with no cached credentials so the UI can prompt.
     if ! sudo_can_run; then
-        emit_sudo_required_event "bash setup-hyprland-alternatives.sh --ref v$latest_version" "false"
+        emit_sudo_required_event "bash setup-hyprland-alternatives.sh --with-deps --ref v$latest_version" "false"
         print_error "Sudo credentials required to rebuild the upstream Hyprland at /opt/hyprland"
         print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
         return 1
@@ -448,10 +448,16 @@ perform_hyprland_alternatives_update() {
     output_lines=$(get_config "update.output_lines")
     output_lines="${output_lines:-40}"
 
+    # --with-deps is required: the setup script starts from a fresh /opt/hyprland,
+    # so the isolated hypr* dependency chain (hyprutils/aquamarine/hyprgraphics/
+    # wayland-protocols) must be rebuilt alongside Hyprland — otherwise the rebuild
+    # wipes the deps and then fails to configure. (apt -dev prerequisites like
+    # glslang-dev/libinput-dev/libeis-dev/liblua5.5-dev must already be installed;
+    # the setup script reports any that are missing.)
     local ref="v$latest_version"
-    print_status "Rebuilding upstream Hyprland ($ref) into the isolated /opt prefix via setup-hyprland-alternatives.sh..."
+    print_status "Rebuilding upstream Hyprland ($ref) + deps into the isolated /opt prefix via setup-hyprland-alternatives.sh..."
     local out rc
-    out=$(run_with_sudo bash "$setup_script" --ref "$ref" 2>&1)
+    out=$(run_with_sudo bash "$setup_script" --with-deps --ref "$ref" 2>&1)
     rc=$?
     emit_captured_output "$out" "$output_lines"
     if [ "$rc" -ne 0 ]; then
