@@ -138,7 +138,11 @@ if [ "$SKIP_BUILD" = false ]; then
         cat > "$RANGES_SHIM" <<'HPP'
 #pragma once
 #include <version>
-#if !defined(__cpp_lib_ranges_starts_ends_with)
+// Guard on C++20+ too: this header is force-included into EVERY compile, including
+// CMake's compiler-identification test which builds with the default standard
+// (gnu++17). In pre-C++20 the ranges concepts don't exist, so keep the shim empty
+// there (otherwise the trivial test fails and CMake declares the compiler broken).
+#if !defined(__cpp_lib_ranges_starts_ends_with) && __cplusplus >= 202002L
 #include <ranges>
 namespace std::ranges {
 inline constexpr struct __compat_starts_with_fn {
