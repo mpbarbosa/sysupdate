@@ -50,9 +50,11 @@ JOBS="$(nproc 2>/dev/null || echo 2)"
 SKIP_BUILD=false
 DO_REMOVE=false
 WITH_DEPS=""                          # deps to build from source into $DEST (space/comma list)
-# Not packaged (or too old) in apt for recent Hyprland on Ubuntu: the hypr* libs
-# plus wayland-protocols (apt ships 1.47; recent Hyprland needs >= 1.49).
-DEPS_DEFAULT="hyprutils hyprgraphics wayland-protocols"
+# Not packaged (or too old) in apt for recent Hyprland on Ubuntu. Order matters:
+# hyprutils first (everything needs it); wayland-protocols before aquamarine (which
+# may use it); aquamarine must be newer than apt's — Hyprland 0.56.2 uses
+# SBackendOptions::logConnection, added after apt's 0.9.3 (compile error otherwise).
+DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics"
 
 # pkg-config + cmake search paths for anything we build into the isolated prefix,
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
