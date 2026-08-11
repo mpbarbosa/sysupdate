@@ -150,8 +150,20 @@ build_wayland_protocols() {
          meson setup --prefix="$DEST" -Dtests=false "$d/build" "$d/src"; then
         echo "error: meson setup for wayland-protocols failed (see output above)" >&2; rm -rf "$d"; return 1
     fi
-    if ! meson install -C "$d/build" >/dev/null; then
-        echo "error: install of wayland-protocols into $DEST failed" >&2; rm -rf "$d"; return 1
+    # --no-rebuild is essential: a plain `meson install` first runs a full ninja
+    # build, which generates per-protocol enum headers via `wayland-scanner
+    # --strict`. On newer staging XMLs that DTD-validation step fails against an
+    # older system wayland-scanner ("XML failed validation against built-in DTD").
+    # Those headers are internal validation artifacts — NOT install targets, and
+    # NOT needed by Hyprland (which parses the XML with hyprwayland-scanner). We
+    # only need the installed data: the protocol .xml files + wayland-protocols.pc.
+    # --no-rebuild installs exactly those and skips the failing generation.
+    if ! meson install --no-rebuild -C "$d/build"; then
+        echo "error: install of wayland-protocols into $DEST failed (see output above)" >&2; rm -rf "$d"; return 1
+    fi
+    # Sanity-check the two things Hyprland actually consumes are present.
+    if [ ! -f "$DEST/share/pkgconfig/wayland-protocols.pc" ] && [ ! -f "$DEST/lib/pkgconfig/wayland-protocols.pc" ]; then
+        echo "error: wayland-protocols.pc was not installed under $DEST" >&2; rm -rf "$d"; return 1
     fi
     rm -rf "$d"
     echo "    installed wayland-protocols $ref -> $DEST"
