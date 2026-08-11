@@ -22,13 +22,15 @@
 #   sudo bash setup-hyprland-alternatives.sh [--ref <tag>] [--jobs N]
 #   sudo bash setup-hyprland-alternatives.sh --with-deps      # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
 #   sudo bash setup-hyprland-alternatives.sh --with-deps=hyprutils,hyprgraphics  # custom dep list
-#   sudo bash setup-hyprland-alternatives.sh --cxx g++-14     # force a compiler (default auto-picks g++-14 on GCC>=15)
+#   sudo bash setup-hyprland-alternatives.sh --cxx clang++    # override the compiler (default: system g++)
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
 #
-# NOTE: Hyprland 0.56.2 does not compile under GCC 15 (its -Wtemplate-body errors
-# on std::ranges::starts_with). The script auto-uses g++-14 when the default g++ is
-# >= 15 — install it first: sudo apt install g++-14  (or pass --cxx clang++).
+# NOTE: builds with the SYSTEM g++ (GCC 15 on resolute) — required so the GCC-15
+# libstdc++ ABI matches apt's C++ libs (GLIBCXX_3.4.34). Do NOT use an older g++.
+# For GCC 15's -Wtemplate-body false positive on Hyprland 0.56.2 the script passes
+# -Wno-template-body automatically. Use --cxx only for another libstdc++ compiler
+# (e.g. clang++), never an older g++.
 #
 # --with-deps builds/installs the latest release of each named dep into
 # /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
@@ -92,39 +94,36 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 #-------------------------- compiler selection --------------------------
-# Hyprland 0.56.2 does NOT compile under GCC 15: its new eager -Wtemplate-body
-# checking hard-errors on std::ranges::starts_with inside a template body
-# (helpers/MiscFunctions.cpp). Build with g++-14 instead. When --cxx isn't given,
-# auto-prefer g++-14 if the default g++ is >= 15.
+# Build with the SYSTEM default compiler (GCC 15 on Ubuntu resolute). This matters
+# for ABI: apt's C++ libraries (re2, hyprutils, ...) are built with GCC 15 and
+# require its libstdc++ (GLIBCXX_3.4.34). Building with an older g++ (e.g. g++-14)
+# links an older libstdc++ that can't resolve those symbols, so every apt C++ lib
+# fails to link ("undefined reference to ...@GLIBCXX_3.4.34"). Use --cxx only to
+# pick another libstdc++-based compiler (e.g. clang++), never an older g++.
+#
+# GCC 15's new -Wtemplate-body eagerly (and, for Hyprland 0.56.2, wrongly) rejects
+# std::ranges::starts_with in a template body even though <algorithm> is included
+# and the standard is C++26 — the name resolves fine at instantiation. So we pass
+# -Wno-template-body when building Hyprland with GCC, deferring the check.
+HYPRLAND_EXTRA_CXXFLAGS=""
 if [ "$SKIP_BUILD" = false ]; then
-    if [ -z "$CXX" ]; then
-        gxx_major="$(g++ -dumpversion 2>/dev/null | cut -d. -f1)"
-        if [ "${gxx_major:-0}" -ge 15 ]; then
-            if command -v g++-14 >/dev/null 2>&1; then
-                CXX="g++-14"
-                echo "==> Default g++ is $gxx_major; using g++-14 (Hyprland 0.56.2 fails to build on GCC 15)"
-            else
-                echo "error: default g++ is $gxx_major, which cannot build Hyprland 0.56.2" >&2
-                echo "       install g++-14 and re-run:  sudo apt install g++-14" >&2
-                echo "       (or pass another compiler:  --cxx clang++)" >&2
-                exit 1
-            fi
-        else
-            CXX="g++"
-        fi
-    fi
+    [ -n "$CXX" ] || CXX="g++"
     command -v "$CXX" >/dev/null 2>&1 || { echo "error: C++ compiler '$CXX' not found" >&2; exit 1; }
     # Derive the matching C compiler.
     case "$CXX" in
-        *g++-14) CC="gcc-14" ;;
-        *g++-13) CC="gcc-13" ;;
-        *g++-12) CC="gcc-12" ;;
         *clang++) CC="clang" ;;
-        *g++)    CC="gcc" ;;
-        *)       CC="cc" ;;
+        *g++-14)  CC="gcc-14" ;;
+        *g++-13)  CC="gcc-13" ;;
+        *g++)     CC="gcc" ;;
+        *)        CC="cc" ;;
     esac
     command -v "$CC" >/dev/null 2>&1 || CC="cc"
-    echo "==> Building with CXX=$CXX CC=$CC"
+    # Suppress the GCC-15 -Wtemplate-body false positive for Hyprland (GCC only;
+    # GCC silently ignores the unknown -Wno-* on versions that lack the warning).
+    case "$CXX" in
+        *g++*) HYPRLAND_EXTRA_CXXFLAGS="-Wno-template-body" ;;
+    esac
+    echo "==> Building with CXX=$CXX CC=$CC${HYPRLAND_EXTRA_CXXFLAGS:+ (Hyprland CXXFLAGS: $HYPRLAND_EXTRA_CXXFLAGS)}"
 fi
 
 #-------------------------- build a hypr* dependency into $DEST --------------------------
@@ -305,6 +304,7 @@ if [ "$SKIP_BUILD" = false ]; then
     PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
     cmake --no-warn-unused-cli \
         -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+        -DCMAKE_CXX_FLAGS="$HYPRLAND_EXTRA_CXXFLAGS" \
         -DCMAKE_BUILD_TYPE:STRING=Release \
         -DCMAKE_INSTALL_PREFIX:PATH="$DEST" \
         -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \

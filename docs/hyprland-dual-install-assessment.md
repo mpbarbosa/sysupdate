@@ -78,15 +78,18 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 So the working sequence here is:
 
 ```bash
-sudo apt install glslang-dev libinput-dev libeis-dev liblua5.5-dev g++-14
+sudo apt install glslang-dev libinput-dev libeis-dev liblua5.5-dev
 sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
 ```
 
-> **Compiler:** Hyprland 0.56.2 does **not** compile under **GCC 15** — its new eager
-> `-Wtemplate-body` diagnostic hard-errors on `std::ranges::starts_with` in a template
-> (`helpers/MiscFunctions.cpp`). The script auto-selects `g++-14` when the default `g++`
-> is ≥ 15 (install it: `sudo apt install g++-14`); override with `--cxx <compiler>`
-> (e.g. `--cxx clang++`). Deps and Hyprland are built with the same compiler.
+> **Compiler / GCC 15:** Build with the **system g++ (GCC 15)** — this is required, not
+> optional: apt's C++ libraries (re2, hyprutils, …) are built with GCC 15 and need its
+> libstdc++ (`GLIBCXX_3.4.34`). An older g++ (e.g. `g++-14`) links an older libstdc++ and
+> every apt C++ lib then fails to link (`undefined reference to …@GLIBCXX_3.4.34`).
+> GCC 15's new `-Wtemplate-body` *wrongly* rejects `std::ranges::starts_with` in a Hyprland
+> template body even though `<algorithm>` is included (a false positive; it resolves at
+> instantiation) — so the script passes **`-Wno-template-body`** when building Hyprland with
+> GCC. Use `--cxx clang++` only if you prefer clang (also libstdc++-based); never an older g++.
 
 `--with-deps` (default list: `hyprutils wayland-protocols aquamarine hyprgraphics`) installs each dependency's latest release into the isolated prefix — `hyprwm/<dep>` built via CMake with RPATH, `wayland-protocols` copied in data-only — in an order where earlier deps are visible to later ones (hyprutils first; wayland-protocols before aquamarine), and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
