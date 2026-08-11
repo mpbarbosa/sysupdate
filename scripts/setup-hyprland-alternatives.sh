@@ -298,6 +298,21 @@ if [ "$SKIP_BUILD" = false ]; then
         exit 1
     fi
 
+    # Compatibility patch: Ubuntu resolute's libstdc++ (GCC 15.2) does not provide
+    # std::ranges::starts_with (P1659), which Hyprland 0.56.2 uses in exactly one
+    # place (helpers/MiscFunctions.cpp). Replace it with the equivalent C++20
+    # member std::string_view::starts_with, which every supported stdlib has. Only
+    # applied when a probe confirms the toolchain lacks the algorithm, and only if
+    # the exact expression is present (no-op on newer Hyprland / a fixed libstdc++).
+    mf="$build_root/src/src/helpers/MiscFunctions.cpp"
+    if [ -f "$mf" ] && grep -q 'std::ranges::starts_with(str_view, prefixes)' "$mf"; then
+        if ! printf '#include <algorithm>\n#include <string_view>\nbool p(){std::string_view s;return std::ranges::starts_with(s,s);}\n' \
+             | "$CXX" -std=c++26 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+            echo "    patching MiscFunctions.cpp: std::ranges::starts_with -> string_view::starts_with (libstdc++ lacks the algorithm)"
+            sed -i 's/std::ranges::starts_with(str_view, prefixes)/str_view.starts_with(prefixes)/' "$mf"
+        fi
+    fi
+
     echo "    configuring (CMake, prefix=$DEST, RPATH=$DEST/lib) ..."
     # errexit off around the build so we can give an actionable dependency message.
     set +e
