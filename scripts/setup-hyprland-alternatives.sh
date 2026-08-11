@@ -22,8 +22,13 @@
 #   sudo bash setup-hyprland-alternatives.sh [--ref <tag>] [--jobs N]
 #   sudo bash setup-hyprland-alternatives.sh --with-deps      # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
 #   sudo bash setup-hyprland-alternatives.sh --with-deps=hyprutils,hyprgraphics  # custom dep list
+#   sudo bash setup-hyprland-alternatives.sh --cxx g++-14     # force a compiler (default auto-picks g++-14 on GCC>=15)
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
+#
+# NOTE: Hyprland 0.56.2 does not compile under GCC 15 (its -Wtemplate-body errors
+# on std::ranges::starts_with). The script auto-uses g++-14 when the default g++ is
+# >= 15 — install it first: sudo apt install g++-14  (or pass --cxx clang++).
 #
 # --with-deps builds/installs the latest release of each named dep into
 # /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
@@ -49,6 +54,8 @@ REF=""                               # git ref to build (default: latest release
 JOBS="$(nproc 2>/dev/null || echo 2)"
 SKIP_BUILD=false
 DO_REMOVE=false
+CXX=""                                # C++ compiler ("" = auto; see compiler selection below)
+CC=""                                 # C compiler (derived from CXX)
 WITH_DEPS=""                          # deps to build from source into $DEST (space/comma list)
 # Not packaged (or too old) in apt for recent Hyprland on Ubuntu. Order matters:
 # hyprutils first (everything needs it); wayland-protocols before aquamarine (which
@@ -69,8 +76,10 @@ while [ $# -gt 0 ]; do
         --remove)       DO_REMOVE=true; shift ;;
         --with-deps)    WITH_DEPS="$DEPS_DEFAULT"; shift ;;
         --with-deps=*)  WITH_DEPS="${1#*=}"; shift ;;
+        --cxx)          CXX="${2:-}"; shift 2 ;;
+        --cxx=*)        CXX="${1#*=}"; shift ;;
         -h|--help)
-            sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "error: unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -80,6 +89,42 @@ WITH_DEPS="${WITH_DEPS//,/ }"        # accept comma- or space-separated lists
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run with sudo: sudo bash $0 [--ref <tag>] [--skip-build] [--remove]" >&2
     exit 1
+fi
+
+#-------------------------- compiler selection --------------------------
+# Hyprland 0.56.2 does NOT compile under GCC 15: its new eager -Wtemplate-body
+# checking hard-errors on std::ranges::starts_with inside a template body
+# (helpers/MiscFunctions.cpp). Build with g++-14 instead. When --cxx isn't given,
+# auto-prefer g++-14 if the default g++ is >= 15.
+if [ "$SKIP_BUILD" = false ]; then
+    if [ -z "$CXX" ]; then
+        gxx_major="$(g++ -dumpversion 2>/dev/null | cut -d. -f1)"
+        if [ "${gxx_major:-0}" -ge 15 ]; then
+            if command -v g++-14 >/dev/null 2>&1; then
+                CXX="g++-14"
+                echo "==> Default g++ is $gxx_major; using g++-14 (Hyprland 0.56.2 fails to build on GCC 15)"
+            else
+                echo "error: default g++ is $gxx_major, which cannot build Hyprland 0.56.2" >&2
+                echo "       install g++-14 and re-run:  sudo apt install g++-14" >&2
+                echo "       (or pass another compiler:  --cxx clang++)" >&2
+                exit 1
+            fi
+        else
+            CXX="g++"
+        fi
+    fi
+    command -v "$CXX" >/dev/null 2>&1 || { echo "error: C++ compiler '$CXX' not found" >&2; exit 1; }
+    # Derive the matching C compiler.
+    case "$CXX" in
+        *g++-14) CC="gcc-14" ;;
+        *g++-13) CC="gcc-13" ;;
+        *g++-12) CC="gcc-12" ;;
+        *clang++) CC="clang" ;;
+        *g++)    CC="gcc" ;;
+        *)       CC="cc" ;;
+    esac
+    command -v "$CC" >/dev/null 2>&1 || CC="cc"
+    echo "==> Building with CXX=$CXX CC=$CC"
 fi
 
 #-------------------------- build a hypr* dependency into $DEST --------------------------
@@ -109,6 +154,7 @@ build_hypr_dep() {
     fi
     if ! PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
          cmake --no-warn-unused-cli \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
             -DCMAKE_BUILD_TYPE:STRING=Release \
             -DCMAKE_INSTALL_PREFIX:PATH="$DEST" \
             -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \
@@ -258,6 +304,7 @@ if [ "$SKIP_BUILD" = false ]; then
     set +e
     PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
     cmake --no-warn-unused-cli \
+        -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
         -DCMAKE_BUILD_TYPE:STRING=Release \
         -DCMAKE_INSTALL_PREFIX:PATH="$DEST" \
         -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \
