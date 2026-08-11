@@ -58,6 +58,7 @@ SKIP_BUILD=false
 DO_REMOVE=false
 CXX=""                                # C++ compiler ("" = auto; see compiler selection below)
 CC=""                                 # C compiler (derived from CXX)
+RANGES_SHIM=""                        # path to a force-included compat shim, if needed
 WITH_DEPS=""                          # deps to build from source into $DEST (space/comma list)
 # Not packaged (or too old) in apt for recent Hyprland on Ubuntu. Order matters:
 # hyprutils first (everything needs it); wayland-protocols before aquamarine (which
@@ -118,11 +119,45 @@ if [ "$SKIP_BUILD" = false ]; then
         *)        CC="cc" ;;
     esac
     command -v "$CC" >/dev/null 2>&1 || CC="cc"
-    # Suppress the GCC-15 -Wtemplate-body false positive for Hyprland (GCC only;
-    # GCC silently ignores the unknown -Wno-* on versions that lack the warning).
+    # Suppress the GCC-15 -Wtemplate-body diagnostic for Hyprland (GCC only; GCC
+    # silently ignores the unknown -Wno-* on versions that lack the warning).
     case "$CXX" in
         *g++*) HYPRLAND_EXTRA_CXXFLAGS="-Wno-template-body" ;;
     esac
+
+    # Ubuntu resolute's libstdc++ (GCC 15.2) does NOT implement
+    # std::ranges::starts_with (P1659) — verified: __cpp_lib_ranges_starts_ends_with
+    # is undefined and it's absent from <algorithm>. Hyprland 0.56.2 uses it on a
+    # lazy transform_view (so the .starts_with() member won't do). When the toolchain
+    # lacks the algorithm, provide it via a force-included compat shim rather than
+    # patching Hyprland's source. The shim is itself guarded on the feature macro, so
+    # it's a no-op once the stdlib gains the algorithm.
+    if ! printf '#include <algorithm>\n#include <string_view>\nbool p(){std::string_view s;return std::ranges::starts_with(s,s);}\n' \
+         | "$CXX" -std=c++26 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+        RANGES_SHIM="$(mktemp /tmp/hypr-ranges-compat-XXXXXX.hpp)"
+        cat > "$RANGES_SHIM" <<'HPP'
+#pragma once
+#include <version>
+#if !defined(__cpp_lib_ranges_starts_ends_with)
+#include <ranges>
+namespace std::ranges {
+inline constexpr struct __compat_starts_with_fn {
+    template <input_range R1, input_range R2>
+    constexpr bool operator()(R1&& r1, R2&& r2) const {
+        auto it1 = ranges::begin(r1); auto e1 = ranges::end(r1);
+        auto it2 = ranges::begin(r2); auto e2 = ranges::end(r2);
+        for (; it2 != e2; ++it1, ++it2)
+            if (it1 == e1 || !(*it1 == *it2)) return false;
+        return true;
+    }
+} starts_with{};
+}
+#endif
+HPP
+        HYPRLAND_EXTRA_CXXFLAGS="${HYPRLAND_EXTRA_CXXFLAGS:+$HYPRLAND_EXTRA_CXXFLAGS }-include $RANGES_SHIM"
+        echo "==> stdlib lacks std::ranges::starts_with — injecting a compat shim"
+    fi
+
     echo "==> Building with CXX=$CXX CC=$CC${HYPRLAND_EXTRA_CXXFLAGS:+ (Hyprland CXXFLAGS: $HYPRLAND_EXTRA_CXXFLAGS)}"
 fi
 
@@ -290,27 +325,12 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "==> Building upstream Hyprland $REF into $DEST (isolated prefix)"
 
     build_root="$(mktemp -d /tmp/hyprland-build-XXXXXX)"
-    trap 'rm -rf "$build_root"' EXIT
+    trap 'rm -rf "$build_root"; [ -n "${RANGES_SHIM:-}" ] && rm -f "$RANGES_SHIM"' EXIT
 
     echo "    cloning $REF ..."
     if ! git clone --recursive --depth 1 --branch "$REF" "$REPO" "$build_root/src" 2>&1 | tail -3; then
         echo "error: git clone of $REF failed" >&2
         exit 1
-    fi
-
-    # Compatibility patch: Ubuntu resolute's libstdc++ (GCC 15.2) does not provide
-    # std::ranges::starts_with (P1659), which Hyprland 0.56.2 uses in exactly one
-    # place (helpers/MiscFunctions.cpp). Replace it with the equivalent C++20
-    # member std::string_view::starts_with, which every supported stdlib has. Only
-    # applied when a probe confirms the toolchain lacks the algorithm, and only if
-    # the exact expression is present (no-op on newer Hyprland / a fixed libstdc++).
-    mf="$build_root/src/src/helpers/MiscFunctions.cpp"
-    if [ -f "$mf" ] && grep -q 'std::ranges::starts_with(str_view, prefixes)' "$mf"; then
-        if ! printf '#include <algorithm>\n#include <string_view>\nbool p(){std::string_view s;return std::ranges::starts_with(s,s);}\n' \
-             | "$CXX" -std=c++26 -x c++ -fsyntax-only - >/dev/null 2>&1; then
-            echo "    patching MiscFunctions.cpp: std::ranges::starts_with -> string_view::starts_with (libstdc++ lacks the algorithm)"
-            sed -i 's/std::ranges::starts_with(str_view, prefixes)/str_view.starts_with(prefixes)/' "$mf"
-        fi
     fi
 
     echo "    configuring (CMake, prefix=$DEST, RPATH=$DEST/lib) ..."
