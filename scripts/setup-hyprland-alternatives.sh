@@ -25,10 +25,11 @@
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
 #
-# --with-deps builds the latest release of each named dep from source into
-# /opt/hyprland (RPATH-isolated) BEFORE building Hyprland, for when apt's copy is
-# too old or absent. Default list: hyprutils, hyprgraphics (hyprwm/<dep>, CMake)
-# and wayland-protocols (freedesktop, meson — apt has 1.47, Hyprland needs >=1.49).
+# --with-deps builds/installs the latest release of each named dep into
+# /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
+# Default list: hyprutils, hyprgraphics (hyprwm/<dep>, CMake, RPATH-isolated) and
+# wayland-protocols (freedesktop — apt has 1.47, Hyprland needs >=1.49; installed
+# data-only: XML tree + a .pc, no meson/wayland-scanner build).
 # Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev.
 #
 # Idempotent: safe to re-run (rebuilds /opt/hyprland and re-registers alternatives).
@@ -125,11 +126,21 @@ build_hypr_dep() {
     echo "    installed $name $ref -> $DEST"
 }
 
-# Build freedesktop wayland-protocols (meson, not a hyprwm/cmake project) into
-# $DEST. apt ships 1.47; recent Hyprland needs >= 1.49. It installs only data
-# (protocol XML + an arch-independent .pc), so this is a quick, compile-free build.
+# Install freedesktop wayland-protocols into $DEST as DATA ONLY (no meson build).
+#
+# apt ships 1.47; recent Hyprland needs >= 1.49. Building wayland-protocols with
+# meson runs `wayland-scanner --strict` to generate per-protocol enum headers
+# that ARE install targets in 1.49 — and that step fails DTD validation on newer
+# staging XMLs against the (older) system wayland-scanner. So a full `meson
+# install` fails, and `meson install --no-rebuild` fails too (the headers it
+# wants to install were never built).
+#
+# But Hyprland never needs those generated C headers: it consumes wayland-protocols
+# purely as data — the protocol .xml files, located at build time via
+# `pkg-config --variable=pkgdatadir wayland-protocols`. So we install exactly that:
+# the XML tree (stable/staging/unstable, structure preserved) + a hand-written .pc
+# carrying the version and pkgdatadir. No meson, no wayland-scanner, no compile.
 build_wayland_protocols() {
-    command -v meson >/dev/null 2>&1 || { echo "error: meson is required to build wayland-protocols" >&2; return 1; }
     local repo="https://gitlab.freedesktop.org/wayland/wayland-protocols.git"
 
     local ref
@@ -139,34 +150,48 @@ build_wayland_protocols() {
              | sort -V | tail -1)"
     [ -n "$ref" ] || { echo "error: could not resolve a wayland-protocols release tag" >&2; return 1; }
 
-    echo "==> Building wayland-protocols $ref into $DEST"
+    echo "==> Installing wayland-protocols $ref into $DEST (data-only)"
     local d
-    d="$(mktemp -d "/tmp/wayland-protocols-build-XXXXXX")"
+    d="$(mktemp -d "/tmp/wayland-protocols-XXXXXX")"
 
     if ! git clone --depth 1 --branch "$ref" "$repo" "$d/src" >/dev/null; then
         echo "error: clone of wayland-protocols $ref failed" >&2; rm -rf "$d"; return 1
     fi
-    if ! PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
-         meson setup --prefix="$DEST" -Dtests=false "$d/build" "$d/src"; then
-        echo "error: meson setup for wayland-protocols failed (see output above)" >&2; rm -rf "$d"; return 1
+
+    # Install the protocol XML tree, preserving the stable/staging/unstable layout
+    # that pkgdatadir consumers expect (e.g. staging/color-management/*.xml).
+    local pkgdatadir="$DEST/share/wayland-protocols"
+    install -d "$pkgdatadir"
+    local copied=0 sub
+    for sub in stable staging unstable; do
+        if [ -d "$d/src/$sub" ]; then
+            cp -a "$d/src/$sub" "$pkgdatadir/"
+            copied=1
+        fi
+    done
+    [ -f "$d/src/wayland-protocols.dtd" ] && cp -a "$d/src/wayland-protocols.dtd" "$pkgdatadir/"
+    if [ "$copied" -ne 1 ]; then
+        echo "error: no protocol dirs (stable/staging/unstable) found in wayland-protocols $ref" >&2
+        rm -rf "$d"; return 1
     fi
-    # --no-rebuild is essential: a plain `meson install` first runs a full ninja
-    # build, which generates per-protocol enum headers via `wayland-scanner
-    # --strict`. On newer staging XMLs that DTD-validation step fails against an
-    # older system wayland-scanner ("XML failed validation against built-in DTD").
-    # Those headers are internal validation artifacts — NOT install targets, and
-    # NOT needed by Hyprland (which parses the XML with hyprwayland-scanner). We
-    # only need the installed data: the protocol .xml files + wayland-protocols.pc.
-    # --no-rebuild installs exactly those and skips the failing generation.
-    if ! meson install --no-rebuild -C "$d/build"; then
-        echo "error: install of wayland-protocols into $DEST failed (see output above)" >&2; rm -rf "$d"; return 1
-    fi
-    # Sanity-check the two things Hyprland actually consumes are present.
-    if [ ! -f "$DEST/share/pkgconfig/wayland-protocols.pc" ] && [ ! -f "$DEST/lib/pkgconfig/wayland-protocols.pc" ]; then
-        echo "error: wayland-protocols.pc was not installed under $DEST" >&2; rm -rf "$d"; return 1
-    fi
+
+    # Synthesize the pkg-config file Hyprland reads: it needs Version (for the
+    # >=1.49 check) and the pkgdatadir variable (to locate the XMLs). Installed to
+    # share/pkgconfig (arch-independent), which is on DEST_PKGCFG.
+    local ver="${ref#v}"
+    install -d "$DEST/share/pkgconfig"
+    cat > "$DEST/share/pkgconfig/wayland-protocols.pc" <<PC
+prefix=$DEST
+datarootdir=\${prefix}/share
+pkgdatadir=\${datarootdir}/wayland-protocols
+
+Name: Wayland Protocols
+Description: Wayland protocol files
+Version: $ver
+PC
+
     rm -rf "$d"
-    echo "    installed wayland-protocols $ref -> $DEST"
+    echo "    installed wayland-protocols $ref (data-only) -> $pkgdatadir"
 }
 
 # Dispatch a dependency name to the right builder (hyprwm/cmake vs the special
