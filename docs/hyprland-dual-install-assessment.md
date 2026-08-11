@@ -70,9 +70,9 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 | `hyprgraphics` | *(not packaged)* | required | ❌ → `--with-deps` builds it |
 | `libinput` | 1.31.1 (`libinput-dev`) | ≥ 1.29 | `sudo apt install libinput-dev` |
 | `libeis-1.0` | 1.5.0 (`libeis-dev`) | required | `sudo apt install libeis-dev` |
-| **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` builds it (meson, `--no-rebuild`*) |
+| **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` installs it (data-only*) |
 
-\* wayland-protocols is installed with `meson install --no-rebuild`: a plain install first builds per-protocol enum headers via `wayland-scanner --strict`, which fails DTD validation on newer staging XMLs against an older system wayland-scanner. Those headers are internal validation artifacts (not install targets, not needed by Hyprland, which parses the XML with `hyprwayland-scanner`); `--no-rebuild` installs just the `.xml` + `.pc` that Hyprland actually consumes.
+\* wayland-protocols is installed **data-only** (no meson build). Building it runs `wayland-scanner --strict` to generate per-protocol enum headers that *are* install targets in 1.49, and that step fails DTD validation on newer staging XMLs against the older system wayland-scanner — so both `meson install` and `meson install --no-rebuild` fail. But Hyprland never needs those C headers; it consumes wayland-protocols purely as data (the XML files, located via `pkg-config --variable=pkgdatadir`). So the script copies the XML tree (stable/staging/unstable) into `/opt/hyprland/share/wayland-protocols` and writes a `.pc` with the version + pkgdatadir — no meson, no wayland-scanner, no compile.
 
 So the working sequence here is:
 
@@ -81,7 +81,7 @@ sudo apt install glslang-dev libinput-dev libeis-dev
 sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
 ```
 
-`--with-deps` (default list: `hyprutils hyprgraphics wayland-protocols`) builds each dependency's latest release into the isolated prefix — `hyprwm/<dep>` via CMake with RPATH, `wayland-protocols` via meson — ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
+`--with-deps` (default list: `hyprutils hyprgraphics wayland-protocols`) installs each dependency's latest release into the isolated prefix — `hyprwm/<dep>` built via CMake with RPATH, `wayland-protocols` copied in data-only — ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
 ## Caveats (these decide whether it's worth it)
 
