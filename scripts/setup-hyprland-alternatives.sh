@@ -369,7 +369,10 @@ EOF
     fi
 
     echo "    compiling (-j$JOBS) ..."
-    cmake --build "$build_root/build" --config Release --target Hyprland -j"$JOBS"
+    # Build ALL default targets, not just the Hyprland compositor: `cmake --install`
+    # installs hyprctl and hyprpm too (and the alternatives group registers them as
+    # slaves), so they must be built or the install step fails ("cannot find hyprctl").
+    cmake --build "$build_root/build" --config Release -j"$JOBS"
     build_rc=$?
     if [ $build_rc -ne 0 ]; then
         set -e
