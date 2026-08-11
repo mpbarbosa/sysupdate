@@ -63,13 +63,14 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 | Dependency | apt provides | v0.56.2 needs | Action |
 | --- | --- | --- | --- |
 | `glslang` (cmake config) | `glslang-dev` | present | `sudo apt install glslang-dev` |
-| `aquamarine` | 0.9.3 | ≥ 0.9.3 | ✅ apt |
 | `hyprlang` | 0.6.7 | ≥ 0.6.7 | ✅ apt |
 | `hyprcursor` | 0.1.13 | ≥ 0.1.7 | ✅ apt |
+| **`aquamarine`** | **0.9.3** | pkg-check `≥0.9.3` passes, but 0.56.2's *code* uses `SBackendOptions::logConnection` (added after 0.9.3) → **compile error** | ❌ too old → `--with-deps` builds it |
 | **`hyprutils`** | **0.11.0** | **≥ 0.14.0** | ❌ too old → `--with-deps` builds it |
 | `hyprgraphics` | *(not packaged)* | required | ❌ → `--with-deps` builds it |
 | `libinput` | 1.31.1 (`libinput-dev`) | ≥ 1.29 | `sudo apt install libinput-dev` |
 | `libeis-1.0` | 1.5.0 (`libeis-dev`) | required | `sudo apt install libeis-dev` |
+| **`lua`** | 5.5.0 (`liblua5.5-dev`) | `≥5.5, <5.6` | `sudo apt install liblua5.5-dev` |
 | **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` installs it (data-only*) |
 
 \* wayland-protocols is installed **data-only** (no meson build). Building it runs `wayland-scanner --strict` to generate per-protocol enum headers that *are* install targets in 1.49, and that step fails DTD validation on newer staging XMLs against the older system wayland-scanner — so both `meson install` and `meson install --no-rebuild` fail. But Hyprland never needs those C headers; it consumes wayland-protocols purely as data (the XML files, located via `pkg-config --variable=pkgdatadir`). So the script copies the XML tree (stable/staging/unstable) into `/opt/hyprland/share/wayland-protocols` and writes a `.pc` with the version + pkgdatadir — no meson, no wayland-scanner, no compile.
@@ -77,11 +78,11 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 So the working sequence here is:
 
 ```bash
-sudo apt install glslang-dev libinput-dev libeis-dev
+sudo apt install glslang-dev libinput-dev libeis-dev liblua5.5-dev
 sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
 ```
 
-`--with-deps` (default list: `hyprutils hyprgraphics wayland-protocols`) installs each dependency's latest release into the isolated prefix — `hyprwm/<dep>` built via CMake with RPATH, `wayland-protocols` copied in data-only — ordered so earlier deps are visible to later ones, and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
+`--with-deps` (default list: `hyprutils wayland-protocols aquamarine hyprgraphics`) installs each dependency's latest release into the isolated prefix — `hyprwm/<dep>` built via CMake with RPATH, `wayland-protocols` copied in data-only — in an order where earlier deps are visible to later ones (hyprutils first; wayland-protocols before aquamarine), and points Hyprland's `PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH` at `/opt/hyprland` so those fresh builds win over apt's.
 
 ## Caveats (these decide whether it's worth it)
 
