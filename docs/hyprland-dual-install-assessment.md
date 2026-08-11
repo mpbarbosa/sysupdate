@@ -70,7 +70,9 @@ Configuring v0.56.2 on this system resolved almost everything from apt and surfa
 | `hyprgraphics` | *(not packaged)* | required | ❌ → `--with-deps` builds it |
 | `libinput` | 1.31.1 (`libinput-dev`) | ≥ 1.29 | `sudo apt install libinput-dev` |
 | `libeis-1.0` | 1.5.0 (`libeis-dev`) | required | `sudo apt install libeis-dev` |
-| **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` builds it (meson) |
+| **`wayland-protocols`** | **1.47** | **≥ 1.49** | ❌ too old → `--with-deps` builds it (meson, `--no-rebuild`*) |
+
+\* wayland-protocols is installed with `meson install --no-rebuild`: a plain install first builds per-protocol enum headers via `wayland-scanner --strict`, which fails DTD validation on newer staging XMLs against an older system wayland-scanner. Those headers are internal validation artifacts (not install targets, not needed by Hyprland, which parses the XML with `hyprwayland-scanner`); `--no-rebuild` installs just the `.xml` + `.pc` that Hyprland actually consumes.
 
 So the working sequence here is:
 
