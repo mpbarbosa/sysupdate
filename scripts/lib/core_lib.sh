@@ -437,6 +437,11 @@ run_with_sudo() {
     local command_preview="$*"
     local cached_credentials="false"
 
+    # Callers that retry on failure (e.g. apt_manager.sh's --fix-missing
+    # cascade) can check this to skip pointless retries: sudo being blocked
+    # won't change between attempts within the same run.
+    SUDO_UNAVAILABLE=false
+
     if sudo_credentials_cached; then
         cached_credentials="true"
     fi
@@ -444,8 +449,10 @@ run_with_sudo() {
     emit_sudo_required_event "$command_preview" "$cached_credentials"
 
     if ! sudo_can_run; then
+        # shellcheck disable=SC2034  # read by callers in other sourced files (e.g. apt_manager.sh)
+        SUDO_UNAVAILABLE=true
         print_error "Sudo credentials required for command: $command_preview"
-        print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
+        print_error "Re-run in an interactive terminal, or run 'sudo -v' to cache credentials before using non-interactive/quiet mode"
         return 1
     fi
 

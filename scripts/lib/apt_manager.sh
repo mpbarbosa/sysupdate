@@ -599,6 +599,10 @@ upgrade_packages() {
             
             print_success "Package upgrade operation completed successfully"
         fi
+    elif [ "$SUDO_UNAVAILABLE" = true ]; then
+        print_error "Skipping upgrade retries - sudo authentication is unavailable in this non-interactive run"
+        print_error "Run 'sudo -v' before invoking sysupdate in quiet/non-interactive mode, or re-run interactively"
+        return 1
     else
         print_warning "apt upgrade failed (exit code $upgrade_exit_code) - retrying with --fix-missing and Acquire::Retries=3 to handle transient network errors..."
         echo

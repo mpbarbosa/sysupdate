@@ -162,6 +162,12 @@ Examples:
     $SCRIPT_NAME --check-only           # Run read-only update discovery checks
     $SCRIPT_NAME --json-events          # Emit machine-readable JSONL events
 
+Notes:
+    Operations that need root (apt/pacman/dpkg, etc.) run via sudo per-command.
+    In quiet/non-interactive mode or when invoked without a TTY (e.g. the web
+    backend), sudo cannot prompt for a password. Run 'sudo -v' to cache your
+    credentials before invoking $SCRIPT_NAME that way, or re-run interactively.
+
 Package Managers:
     • APT/DPKG (Debian/Ubuntu)
     • Pacman (Arch Linux)
