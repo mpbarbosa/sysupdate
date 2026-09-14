@@ -22,6 +22,13 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$SCRIPT_DIR/fwupd.yaml"
 
+# fwupdmgr exits with EXIT_NOTHING_TO_DO when there was simply nothing to do
+# (metadata already current, no updatable devices). That is not a failure.
+FWUPD_EXIT_NOTHING_TO_DO=2
+
+# Fallback for firmware.required_esp_mb when the config omits it
+FWUPD_DEFAULT_REQUIRED_ESP_MB=32
+
 # Show what's taking up space in /boot/efi
 show_efi_space_usage() {
     print_status "Analyzing /boot/efi space usage..."
@@ -50,95 +57,143 @@ show_efi_space_usage() {
     fi
 }
 
-# Clean up old EFI files to free space
-cleanup_efi_space() {
-    print_status "Attempting to free up space in /boot/efi..."
-    
-    # Show what's using space before cleanup
-    show_efi_space_usage
-    
-    local cleaned=0
-    
-    # First try to remove old kernels using apt autoremove
-    print_status "Removing old kernels..."
-    if sudo apt-get autoremove --purge -y 2>/dev/null; then
-        cleaned=1
-        print_success "Old kernels removed"
-    fi
-    
-    # Clean fwupd cache if the directory exists
-    if [ -d "/boot/efi/EFI/fwupd" ]; then
-        print_status "Removing old fwupd files..."
-        if sudo rm -rf /boot/efi/EFI/fwupd/*.* 2>/dev/null; then
-            cleaned=1
-        fi
-    fi
-    
-    # Remove old update capsules
-    if [ -d "/boot/efi/EFI/UpdateCapsule" ]; then
-        print_status "Removing old update capsules..."
-        if sudo rm -rf /boot/efi/EFI/UpdateCapsule/* 2>/dev/null; then
-            cleaned=1
-        fi
-    fi
-    
-    # Clean apt cache
-    print_status "Cleaning apt cache..."
-    if sudo apt-get clean 2>/dev/null; then
-        cleaned=1
-    fi
-    
-    return $cleaned
+# Report a size (in MB) for the /boot/efi filesystem
+# Usage: get_efi_space_mb avail|size
+# Echoes an integer, or nothing when df output cannot be parsed
+get_efi_space_mb() {
+    local field="$1"
+    local column
+    case "$field" in
+        avail) column=4 ;;
+        size)  column=2 ;;
+        *) echo ""; return 1 ;;
+    esac
+
+    local value
+    value=$(df -P -BM /boot/efi 2>/dev/null | awk -v col="$column" 'NR==2 {print $col}' | tr -d 'M')
+
+    # Guard against unexpected df output (missing mount, wrapped long device names)
+    case "$value" in
+        ''|*[!0-9]*) echo ""; return 1 ;;
+    esac
+
+    echo "$value"
 }
 
-# Check if /boot/efi has sufficient space for firmware updates
-# Returns: 0 if sufficient space or not mounted, 1 if insufficient space
+# Clean up old EFI files to free space
+# Returns: 0 if free space actually increased, 1 otherwise
+cleanup_efi_space() {
+    print_status "Attempting to free up space in /boot/efi..."
+
+    # Show what's using space before cleanup
+    show_efi_space_usage
+
+    local before_mb
+    before_mb=$(get_efi_space_mb avail)
+
+    # Old kernels are the usual occupant of a full ESP, but purging them touches
+    # packages well outside fwupd's remit, so it stays opt-in.
+    if prompt_yes_no "Remove unused packages and old kernels (apt-get autoremove --purge)?"; then
+        print_status "Removing old kernels..."
+        if sudo apt-get autoremove --purge -y; then
+            print_success "Old kernels removed"
+        else
+            print_warning "apt-get autoremove failed"
+        fi
+    fi
+
+    # Stale capsule payloads staged by earlier fwupd runs. Only the payload
+    # directory is touched: the fwupd EFI binaries that sit beside it are what
+    # applies a capsule update and must stay in place.
+    if [ -d "/boot/efi/EFI/fwupd/fw" ]; then
+        print_status "Removing stale fwupd capsule payloads..."
+        sudo rm -f /boot/efi/EFI/fwupd/fw/*.cap 2>/dev/null
+    fi
+
+    # Pending capsules are firmware updates queued for the next boot; removing
+    # one cancels that update, so ask before discarding them.
+    if [ -d "/boot/efi/EFI/UpdateCapsule" ] && sudo test -n "$(sudo ls -A /boot/efi/EFI/UpdateCapsule 2>/dev/null)"; then
+        print_warning "/boot/efi/EFI/UpdateCapsule holds firmware updates queued for the next boot"
+        if prompt_yes_no "Discard the queued capsules?"; then
+            sudo rm -rf /boot/efi/EFI/UpdateCapsule/* 2>/dev/null
+        fi
+    fi
+
+    local after_mb
+    after_mb=$(get_efi_space_mb avail)
+
+    # Measure the result instead of trusting exit codes: rm and apt-get both
+    # report success when there was nothing to remove.
+    if [ -z "$before_mb" ] || [ -z "$after_mb" ]; then
+        return 1
+    fi
+
+    [ "$after_mb" -gt "$before_mb" ]
+}
+
+# Check if /boot/efi has room to stage a firmware capsule
+# Returns: 0 if there is enough space (or no ESP to check), 1 if not
 check_efi_space() {
     # Check if /boot/efi is mounted
     if ! mountpoint -q /boot/efi 2>/dev/null; then
         return 0
     fi
-    
-    # Get available space in MB
-    local available_mb
-    available_mb=$(df -BM /boot/efi | awk 'NR==2 {print $4}' | sed 's/M//')
-    
-    # Require at least 100MB free space for firmware updates
-    local required_mb=100
-    
-    if [ "$available_mb" -lt "$required_mb" ]; then
-        print_error "/boot/efi does not have sufficient space"
-        print_status "Available: ${available_mb}MB, Required: ${required_mb}MB"
 
-        if [ "$CHECK_ONLY_MODE" = true ]; then
-            print_status "Check-only mode - skipping automatic EFI cleanup"
-            return 1
-        fi
-        
-        # Try to clean up old firmware files
-        if cleanup_efi_space; then
-            print_success "Cleanup completed"
-            
-            # Recheck available space
-            available_mb=$(df -BM /boot/efi | awk 'NR==2 {print $4}' | sed 's/M//')
-            print_status "Available space after cleanup: ${available_mb}MB"
-            
-            if [ "$available_mb" -lt "$required_mb" ]; then
-                print_error "Still insufficient space after cleanup"
-                print_status "Required: ${required_mb}MB"
-                print_status "Manual cleanup needed: Check /boot/efi for old files"
-                return 1
-            fi
-            
-            print_success "Sufficient space now available"
-            return 0
-        else
-            print_warning "Unable to free sufficient space automatically"
-            print_status "Manual cleanup needed: Check /boot/efi for old files"
-            return 1
-        fi
+    local available_mb
+    available_mb=$(get_efi_space_mb avail)
+    local total_mb
+    total_mb=$(get_efi_space_mb size)
+
+    if [ -z "$available_mb" ]; then
+        print_warning "Could not read free space on /boot/efi - leaving the check to fwupd"
+        return 0
     fi
-    
+
+    local required_mb
+    required_mb=$(get_config "firmware.required_esp_mb")
+    case "$required_mb" in
+        ''|*[!0-9]*) required_mb=$FWUPD_DEFAULT_REQUIRED_ESP_MB ;;
+    esac
+
+    # A stock ESP is often only 96-100MB, so a fixed threshold can exceed the
+    # partition itself and make the check impossible to satisfy. Cap it.
+    if [ -n "$total_mb" ] && [ "$required_mb" -ge "$total_mb" ]; then
+        required_mb=$(( total_mb / 2 ))
+        print_status "/boot/efi is only ${total_mb}MB - requiring ${required_mb}MB free instead"
+    fi
+
+    if [ "$available_mb" -ge "$required_mb" ]; then
+        return 0
+    fi
+
+    print_error "/boot/efi does not have sufficient space"
+    print_status "Available: ${available_mb}MB, Required: ${required_mb}MB"
+
+    if [ "$CHECK_ONLY_MODE" = true ]; then
+        print_status "Check-only mode - skipping automatic EFI cleanup"
+        return 1
+    fi
+
+    if ! cleanup_efi_space; then
+        print_warning "Unable to free sufficient space automatically"
+        print_status "Manual cleanup needed: Check /boot/efi for old files"
+        return 1
+    fi
+
+    print_success "Cleanup completed"
+
+    # Recheck available space
+    available_mb=$(get_efi_space_mb avail)
+    print_status "Available space after cleanup: ${available_mb:-unknown}MB"
+
+    if [ -z "$available_mb" ] || [ "$available_mb" -lt "$required_mb" ]; then
+        print_error "Still insufficient space after cleanup"
+        print_status "Required: ${required_mb}MB"
+        print_status "Manual cleanup needed: Check /boot/efi for old files"
+        return 1
+    fi
+
+    print_success "Sufficient space now available"
     return 0
 }
 
@@ -152,49 +207,62 @@ check_firmware_updates() {
     no_updates_msg=$(get_config "messages.no_firmware_updates")
     local updates_available_msg
     updates_available_msg=$(get_config "messages.firmware_updates_available")
-    
+
     print_status "$refresh_msg"
-    
+
     # Refresh metadata
     local refresh_cmd
     refresh_cmd=$(get_config "firmware.refresh_command")
-    if ! eval "$refresh_cmd" >/dev/null 2>&1; then
+    local refresh_output
+    local refresh_status
+    refresh_output=$(eval "$refresh_cmd" 2>&1)
+    refresh_status=$?
+
+    if [ "$refresh_status" -eq 0 ]; then
+        print_success "Firmware metadata refreshed"
+    elif [ "$refresh_status" -eq "$FWUPD_EXIT_NOTHING_TO_DO" ]; then
+        # fwupdmgr exits 2 when the metadata is already current - not a failure
+        print_status "Firmware metadata is already up to date"
+    else
         print_warning "Failed to refresh firmware metadata"
+        [ -n "$refresh_output" ] && echo "$refresh_output"
     fi
-    
+
     print_status "$checking_msg"
-    
+
     # Check for firmware updates
     local check_cmd
     check_cmd=$(get_config "firmware.check_command")
     local firmware_output
+    local check_status
     firmware_output=$(eval "$check_cmd" 2>&1)
-    local check_status=$?
-    
-    if [ $check_status -eq 0 ]; then
+    check_status=$?
+
+    if [ "$check_status" -eq 0 ]; then
         emit_summary_event "firmware_updates" "target" "fwupd" "status" "update_available"
         print_success "$updates_available_msg"
         echo "$firmware_output"
-        
+
         # Check EFI space before prompting
         if ! check_efi_space; then
             emit_summary_event "firmware_readiness" "target" "fwupd" "status" "insufficient_efi_space"
             print_warning "Cannot proceed with firmware update due to insufficient space"
             return 1
         fi
-        
+
         # Prompt to update firmware
         if prompt_yes_no "Update firmware now?"; then
             update_firmware
         else
             print_status "Skipping firmware update"
         fi
-    elif [ $check_status -eq 2 ]; then
+    elif [ "$check_status" -eq "$FWUPD_EXIT_NOTHING_TO_DO" ]; then
         emit_summary_event "firmware_updates" "target" "fwupd" "status" "up_to_date"
         print_success "$no_updates_msg"
     else
         emit_summary_event "firmware_updates" "target" "fwupd" "status" "unknown"
-        print_info "$no_updates_msg"
+        print_warning "Could not determine firmware update status (fwupdmgr exited $check_status)"
+        [ -n "$firmware_output" ] && echo "$firmware_output"
     fi
 }
 
@@ -206,15 +274,22 @@ update_firmware() {
     success_msg=$(get_config "messages.firmware_update_success")
     local failed_msg
     failed_msg=$(get_config "messages.firmware_update_failed")
-    
+
     print_status "$updating_msg"
-    
+
     local update_cmd
     update_cmd=$(get_config "firmware.update_command")
-    
-    if eval "$update_cmd"; then
+
+    local update_status
+    eval "$update_cmd"
+    update_status=$?
+
+    if [ "$update_status" -eq 0 ]; then
         print_success "$success_msg"
         print_warning "Note: Some firmware updates may require a system reboot to take effect"
+    elif [ "$update_status" -eq "$FWUPD_EXIT_NOTHING_TO_DO" ]; then
+        # Typically a device that must be rebooted before the next update lands
+        print_warning "No firmware was applied - a reboot may be required before fwupd can continue"
     else
         print_error "$failed_msg"
         return 1
@@ -247,7 +322,7 @@ check_and_install_fwupd() {
             local install_help
             install_help=$(get_config "messages.install_help")
             if [ -n "$install_help" ]; then
-                print_info "$install_help"
+                print_status "$install_help"
             fi
             ask_continue
             return 1

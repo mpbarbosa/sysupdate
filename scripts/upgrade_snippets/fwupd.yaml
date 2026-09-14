@@ -52,3 +52,7 @@ firmware:
   check_command: "fwupdmgr get-updates"
   update_command: "fwupdmgr update"
   requires_sudo: false
+  # Free space (MB) required on /boot/efi before staging a capsule update.
+  # Capped at half the ESP when the partition is smaller than this, so a stock
+  # 96-100MB ESP can still pass. fwupd does its own exact per-payload check.
+  required_esp_mb: 32

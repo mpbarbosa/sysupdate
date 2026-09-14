@@ -52,7 +52,19 @@ firmware:
   refresh_command: "fwupdmgr refresh"
   check_command: "fwupdmgr get-updates"
   update_command: "fwupdmgr update"
+  required_esp_mb: 32
 ```
+
+### `firmware.required_esp_mb`
+
+Free space (in MB) the script wants on `/boot/efi` before it stages a capsule
+update. Defaults to 32 when the key is absent.
+
+A stock ESP is often only 96-100MB, so this threshold is **capped at half the
+partition size** when it would otherwise exceed the ESP itself - an
+unsatisfiable threshold would block every firmware update on such a machine.
+The check is a cheap guard only; fwupd still performs its own exact
+per-payload space check before writing anything.
 
 ## Workflow
 
@@ -70,6 +82,8 @@ firmware:
    - Refreshes firmware metadata: `fwupdmgr refresh`
    - Checks for device updates: `fwupdmgr get-updates`
    - Lists available firmware updates
+   - Verifies `/boot/efi` has room to stage a capsule (see
+     `firmware.required_esp_mb`), offering cleanup if it does not
 
 4. **Apply firmware updates** (if available)
    - Prompts for confirmation
@@ -81,6 +95,13 @@ firmware:
 
 - **0**: Success or no updates needed
 - **1**: Error during update process
+
+### `fwupdmgr` exit codes
+
+`fwupdmgr` exits **2** (`EXIT_NOTHING_TO_DO`) when there was simply nothing to
+do - metadata already current, no updatable devices, or a device that needs a
+reboot before the next update can be applied. The script treats 2 as a normal
+outcome, not a failure. Only other non-zero codes are reported as errors.
 
 ## Common Scenarios
 
@@ -144,9 +165,25 @@ Skipping firmware update
 
 ### Issue: "Failed to refresh firmware metadata"
 
-**Cause**: Network issues or repository unavailable
+**Cause**: Network issues or repository unavailable. (Metadata that is already
+current is reported as "Firmware metadata is already up to date" and is not a
+failure.)
 
 **Solution**: Check internet connection and try again
+
+### Issue: "/boot/efi does not have sufficient space"
+
+**Cause**: The ESP has less free space than `firmware.required_esp_mb`.
+
+**Solution**:
+- The script offers to run `apt-get autoremove --purge` (old kernels are the
+  usual occupant) and clears stale fwupd capsule payloads
+- Inspect manually: `sudo du -h --max-depth=2 /boot/efi | sort -hr`
+- Lower `firmware.required_esp_mb` in `fwupd.yaml` if your capsules are small
+
+Note: the script never deletes the fwupd EFI binaries, and asks before
+discarding capsules already queued for the next boot - removing one cancels
+that pending firmware update.
 
 ### Issue: "No firmware updates available" (but you expect updates)
 
