@@ -50,7 +50,10 @@ update:
 firmware:
   refresh_command: "fwupdmgr refresh"
   check_command: "fwupdmgr get-updates"
-  update_command: "fwupdmgr update"
+  # --no-reboot-check: stage the capsule but never reboot on our own. Many
+  # updates need a reboot to land; the script says so and leaves the timing
+  # to the user rather than dropping the machine mid-session.
+  update_command: "fwupdmgr update --no-reboot-check"
   requires_sudo: false
   # Free space (MB) required on /boot/efi before staging a capsule update.
   # Capped at half the ESP when the partition is smaller than this, so a stock

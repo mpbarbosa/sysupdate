@@ -299,7 +299,11 @@ update_firmware() {
 
     if [ "$update_status" -eq 0 ]; then
         print_success "$success_msg"
-        print_warning "Note: Some firmware updates may require a system reboot to take effect"
+        # Capsule updates land at next power-on. On many systems (Dell in
+        # particular) a warm reboot is not enough and fwupd asks for a full
+        # shutdown, so say so rather than just "reboot".
+        print_warning "Note: firmware is staged, not yet applied"
+        print_status "Run 'fwupdmgr check-reboot-needed' to see what is pending; a full shutdown (power off), not just a reboot, may be required"
     elif [ "$update_status" -eq "$FWUPD_EXIT_NOTHING_TO_DO" ]; then
         # Typically a device that must be rebooted before the next update lands
         print_warning "No firmware was applied - a reboot may be required before fwupd can continue"
