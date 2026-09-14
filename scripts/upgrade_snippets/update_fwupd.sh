@@ -50,11 +50,20 @@ show_efi_space_usage() {
     echo ""
     
     # Show EFI subdirectories if they exist
-    if [ -d "/boot/efi/EFI" ]; then
+    if efi_dir_exists "/boot/efi/EFI"; then
         print_status "EFI subdirectories:"
         sudo ls -lh /boot/efi/EFI/ 2>/dev/null
         echo ""
     fi
+}
+
+# Test for a directory below /boot/efi
+# The ESP is normally mounted dmask=0077, so an unprivileged `[ -d ]` on
+# anything below the mount point returns false even when the directory exists.
+# Probe through sudo, but only when sudo can run without blocking on a password
+# prompt that nobody is there to answer.
+efi_dir_exists() {
+    sudo_can_run && sudo test -d "$1"
 }
 
 # Report a size (in MB) for the /boot/efi filesystem
@@ -105,17 +114,21 @@ cleanup_efi_space() {
     # Stale capsule payloads staged by earlier fwupd runs. Only the payload
     # directory is touched: the fwupd EFI binaries that sit beside it are what
     # applies a capsule update and must stay in place.
-    if [ -d "/boot/efi/EFI/fwupd/fw" ]; then
+    if efi_dir_exists "/boot/efi/EFI/fwupd/fw"; then
         print_status "Removing stale fwupd capsule payloads..."
         sudo rm -f /boot/efi/EFI/fwupd/fw/*.cap 2>/dev/null
     fi
 
     # Pending capsules are firmware updates queued for the next boot; removing
     # one cancels that update, so ask before discarding them.
-    if [ -d "/boot/efi/EFI/UpdateCapsule" ] && sudo test -n "$(sudo ls -A /boot/efi/EFI/UpdateCapsule 2>/dev/null)"; then
-        print_warning "/boot/efi/EFI/UpdateCapsule holds firmware updates queued for the next boot"
-        if prompt_yes_no "Discard the queued capsules?"; then
-            sudo rm -rf /boot/efi/EFI/UpdateCapsule/* 2>/dev/null
+    if efi_dir_exists "/boot/efi/EFI/UpdateCapsule"; then
+        local queued_capsules
+        queued_capsules=$(sudo ls -A /boot/efi/EFI/UpdateCapsule 2>/dev/null)
+        if [ -n "$queued_capsules" ]; then
+            print_warning "/boot/efi/EFI/UpdateCapsule holds firmware updates queued for the next boot"
+            if prompt_yes_no "Discard the queued capsules?"; then
+                sudo rm -rf /boot/efi/EFI/UpdateCapsule/* 2>/dev/null
+            fi
         fi
     fi
 
