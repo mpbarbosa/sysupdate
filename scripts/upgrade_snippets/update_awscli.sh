@@ -134,7 +134,7 @@ update_awscli() {
     if ! config_driven_version_check; then
         local install_help
         install_help=$(get_config "messages.install_help")
-        print_info "$install_help"
+        print_status "$install_help"
         
         if prompt_yes_no "Would you like to install AWS CLI now?"; then
             if ! handle_update_prompt "$APP_DISPLAY_NAME" "2" \
