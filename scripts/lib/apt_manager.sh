@@ -732,14 +732,37 @@ cleanup() {
     ask_continue
 }
 
+# List packages that are wanted but not fully installed, one "name status" per
+# line. Uses dpkg-query rather than `dpkg --audit` because --audit takes the
+# dpkg database lock and therefore fails with "Permission denied" (exit 2, empty
+# stdout) for a non-root user — which used to be indistinguishable from a clean
+# audit and made every unprivileged run claim the system was healthy.
+# dpkg-query only reads the status file, so it works unprivileged.
+# Packages in "deinstall ok config-files" are removed-but-not-purged, which is a
+# normal steady state, not breakage — the ${Want} filter excludes them.
+list_partially_installed_packages() {
+    # ${Status} expands to three words: <want> <error-flag> <current-state>.
+    dpkg-query -W -f='${Package} ${Status}\n' 2>/dev/null |
+        awk '$2 == "install" && ($3 != "ok" || $4 != "installed") { print $1, $3, $4 }'
+}
+
 check_broken_packages() {
     print_operation_header "🔍 Performing comprehensive package integrity check..."
-    
+
     local audit_output
-    audit_output=$(dpkg --audit 2>/dev/null)
-    
+    audit_output=$(list_partially_installed_packages)
+
     if echo "$audit_output" | grep -q .; then
         print_warning "Found broken or partially configured packages"
+        local broken_count
+        broken_count=$(echo "$audit_output" | wc -l)
+        print_status "$broken_count package(s) awaiting configuration:"
+        echo "$audit_output" | head -10 | while read -r _pkg _flag _state; do
+            print_status "  ↳ $_pkg ($_state)"
+        done
+        if [ "$broken_count" -gt 10 ]; then
+            print_status "  ↳ …and $((broken_count - 10)) more"
+        fi
         if [ "$CHECK_ONLY_MODE" = true ]; then
             print_status "Check-only mode - package integrity issues detected, automatic repair skipped"
             emit_summary_event "package_integrity" "package_manager" "dpkg" "status" "issues_detected"
@@ -764,12 +787,14 @@ check_broken_packages() {
         fi
         
         local post_repair_audit
-        post_repair_audit=$(dpkg --audit 2>/dev/null)
+        post_repair_audit=$(list_partially_installed_packages)
         if echo "$post_repair_audit" | grep -q .; then
             print_warning "Some package issues remain after automatic repair"
             print_status "Consider manual package management for remaining issues"
+            emit_summary_event "package_integrity" "package_manager" "dpkg" "status" "issues_remain"
         else
             print_success "All package integrity issues have been resolved"
+            emit_summary_event "package_integrity" "package_manager" "dpkg" "status" "repaired"
         fi
     else
         print_success "No broken packages found - system package integrity is good"

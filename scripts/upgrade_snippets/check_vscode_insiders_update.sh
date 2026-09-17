@@ -59,6 +59,31 @@ resolve_vscode_insiders_deb_url() {
     echo "$VSCODE_INSIDERS_DEB_URL"
 }
 
+# Resolve the code-insiders binary to run --version against.
+# Prefers the PATH entry; falls back to the absolute path the .deb unpacks to,
+# which is where the binary lives when the package was unpacked but the
+# postinst (which creates the /usr/bin symlink) never ran.
+# Echoes the binary path and returns 0, or returns 1 when nothing is on disk.
+resolve_vscode_insiders_binary() {
+    local app_command
+    app_command=$(get_config "application.command")
+    [ -n "$app_command" ] || app_command="code-insiders"
+
+    if command -v "$app_command" &> /dev/null; then
+        command -v "$app_command"
+        return 0
+    fi
+
+    local fallback
+    fallback=$(get_config "version.binary_fallback")
+    if [ -n "$fallback" ] && [ -x "$fallback" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    return 1
+}
+
 # Custom version check for VSCode Insiders
 # VSCode Insiders has a non-standard version format that requires custom handling
 perform_vscode_version_check() {
@@ -74,17 +99,34 @@ perform_vscode_version_check() {
     local install_help
     install_help=$(get_config "messages.install_help")
     
-    if ! check_app_installed_or_help "$app_name" "$app_display" "$install_help"; then
-        emit_summary_event "version_check" "target" "$app_display" "status" "not_installed" "current_version" "unknown" "latest_version" "unknown"
+    # Resolve the binary before deciding "not installed". A .deb that was
+    # unpacked but never configured leaves the real binary under
+    # /usr/share/code-insiders/ while the /usr/bin symlink (created by the
+    # postinst) is missing — `command -v code-insiders` then fails and the old
+    # code told the user to go install an app that is already on disk.
+    local version_binary
+    version_binary=$(resolve_vscode_insiders_binary)
+
+    if [ -z "$version_binary" ]; then
+        # check_app_installed_or_help emits the not_installed summary event.
+        check_app_installed_or_help "$app_name" "$app_display" "$install_help"
         return 1
     fi
-    
+
+    if dpkg_package_needs_configure "$app_name"; then
+        local dpkg_state
+        dpkg_state=$(dpkg_package_state "$app_name")
+        print_warning "$app_display is installed but its package is $dpkg_state, not configured"
+        print_status "Run 'sudo dpkg --configure -a' to finish the installation and restore $app_name on PATH"
+        emit_summary_event "version_check" "target" "$app_display" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "dpkg_state" "$dpkg_state"
+        ask_continue
+        return 1
+    fi
+
     # Get current version and commit hash
-    local version_cmd
-    version_cmd=$(get_config "version.command")
     local version_output
-    version_output=$($version_cmd 2>/dev/null)
-    
+    version_output=$("$version_binary" --version 2>/dev/null)
+
     local current_version
     current_version=$(echo "$version_output" | sed -n '1p')
     local current_commit

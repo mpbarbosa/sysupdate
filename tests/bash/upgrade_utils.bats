@@ -312,3 +312,67 @@ STUB
     [[ "$output" == *"-nv"* ]]
     [[ "$output" != *"--show-progress"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# dpkg_package_state / dpkg_package_needs_configure
+#
+# These exist because `command -v <app>` alone cannot tell "never installed"
+# apart from "unpacked but never configured" — the latter leaves the binary on
+# disk but no PATH symlink, and used to be reported as not_installed.
+# ---------------------------------------------------------------------------
+
+# Put a fake dpkg-query on PATH that reports $1's ${Status} triple.
+stub_dpkg_query() {
+    local status_line="$1"
+    STUB_BIN="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_BIN"
+    if [ "$status_line" = "__unknown__" ]; then
+        printf '#!/bin/bash\nexit 1\n' > "$STUB_BIN/dpkg-query"
+    else
+        printf '#!/bin/bash\nprintf %%s "%s"\n' "$status_line" > "$STUB_BIN/dpkg-query"
+    fi
+    chmod +x "$STUB_BIN/dpkg-query"
+    PATH="$STUB_BIN:$PATH"
+}
+
+@test "dpkg_package_state: reports the current-state word" {
+    stub_dpkg_query "install ok unpacked"
+    run dpkg_package_state somepkg
+    [ "$output" = "unpacked" ]
+}
+
+@test "dpkg_package_state: empty for a package dpkg does not know" {
+    stub_dpkg_query "__unknown__"
+    run dpkg_package_state somepkg
+    [ "$output" = "" ]
+}
+
+@test "dpkg_package_needs_configure: true for unpacked" {
+    stub_dpkg_query "install ok unpacked"
+    run dpkg_package_needs_configure somepkg
+    [ "$status" -eq 0 ]
+}
+
+@test "dpkg_package_needs_configure: true for half-configured" {
+    stub_dpkg_query "install ok half-configured"
+    run dpkg_package_needs_configure somepkg
+    [ "$status" -eq 0 ]
+}
+
+@test "dpkg_package_needs_configure: false for a fully installed package" {
+    stub_dpkg_query "install ok installed"
+    run dpkg_package_needs_configure somepkg
+    [ "$status" -ne 0 ]
+}
+
+@test "dpkg_package_needs_configure: false for removed-but-not-purged" {
+    stub_dpkg_query "deinstall ok config-files"
+    run dpkg_package_needs_configure somepkg
+    [ "$status" -ne 0 ]
+}
+
+@test "dpkg_package_needs_configure: false when dpkg does not know the package" {
+    stub_dpkg_query "__unknown__"
+    run dpkg_package_needs_configure somepkg
+    [ "$status" -ne 0 ]
+}

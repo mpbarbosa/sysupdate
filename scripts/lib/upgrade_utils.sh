@@ -647,6 +647,35 @@ check_app_installed() {
     return 0
 }
 
+# Report the dpkg current-state word for a package ("installed", "unpacked",
+# "half-configured", "config-files", ...), or nothing when dpkg does not know
+# the package / dpkg is unavailable.
+# Uses dpkg-query, which reads the status file without taking the dpkg lock, so
+# it works for an unprivileged user.
+# Usage: dpkg_package_state "code-insiders"
+dpkg_package_state() {
+    local package_name="$1"
+
+    command -v dpkg-query &> /dev/null || return 1
+
+    # ${Status} expands to three words: <want> <error-flag> <current-state>.
+    dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null | awk '{print $3}'
+}
+
+# True when dpkg knows the package but it is not fully configured — the files
+# are unpacked on disk, yet the postinst never ran, so PATH symlinks and
+# desktop entries the postinst creates are missing.
+# Usage: dpkg_package_needs_configure "code-insiders"
+dpkg_package_needs_configure() {
+    local state
+    state=$(dpkg_package_state "$1")
+
+    case "$state" in
+        ""|installed|config-files|not-installed) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # Check if application is installed and show installation help if not
 # Usage: check_app_installed_or_help "command-name" "app-name" "install-message"
 # Returns: 0 if installed, 1 if not (and shows help + asks to continue)

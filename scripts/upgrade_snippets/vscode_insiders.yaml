@@ -38,7 +38,11 @@ messages:
 
 # Version extraction
 version:
-  command: "code-insiders --version"
+  # Where the .deb unpacks the real binary. Used when `code-insiders` is not on
+  # PATH because the package is unpacked but not configured (no postinst run,
+  # so no /usr/bin symlink) — without this the check would claim the app is not
+  # installed at all.
+  binary_fallback: "/usr/share/code-insiders/bin/code-insiders"
   source: "custom"
   # VSCode Insiders version format: 1.96.0-insider-1732118645
   # We need custom logic to fetch from download redirect
