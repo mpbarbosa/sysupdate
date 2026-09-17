@@ -21,6 +21,34 @@ fi
 # APT PACKAGE MANAGER FUNCTIONS
 #=============================================================================
 
+# True when no human is attached to answer a debconf dialog.
+#
+# This cannot be decided the way maintainer scripts try to decide it. apt hands
+# dpkg a pseudo-terminal so it can render progress, so `[ -t 1 ]` inside a
+# postinst is true even when sysupdate was launched headlessly by the web
+# backend or a timer. Debconf then selects the whiptail frontend and blocks on
+# a dialog rendered into a pty nobody is reading — unanswerable, and with no
+# timeout. Our own stdin is the honest signal: it reflects whether a terminal
+# is actually attached to sysupdate.
+apt_debconf_is_unattended() {
+    [ "$QUIET_MODE" = true ] || [ "$CHECK_ONLY_MODE" = true ] || [ ! -t 0 ]
+}
+
+# Run an apt/apt-get/dpkg command under sudo, forcing debconf's noninteractive
+# frontend when nobody could answer a prompt.
+#
+# The variables are passed through sudo's argv rather than exported, because
+# sudo's default env_reset drops DEBIAN_FRONTEND from the environment.
+# DEBCONF_NONINTERACTIVE_SEEN=true additionally stops debconf from re-asking
+# questions it has already recorded an answer for.
+run_apt() {
+    if apt_debconf_is_unattended; then
+        run_with_sudo DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true "$@"
+    else
+        run_with_sudo "$@"
+    fi
+}
+
 apt_emit_output_line() {
     local display_line="$1"
     local line_type="${2:-output}"
@@ -260,7 +288,7 @@ apt_handle_repository_update_failure() {
                 print_status "🔄 Re-running apt-get update..."
                 echo ""
 
-                rerun_output=$(run_with_sudo apt-get update 2>&1)
+                rerun_output=$(run_apt apt-get update 2>&1)
                 local rerun_exit_code=$?
                 apt_emit_command_output "$rerun_output" "update"
 
@@ -315,7 +343,7 @@ apt_install_named_packages() {
     read -r -a packages <<< "$packages_string"
     [ ${#packages[@]} -gt 0 ] || return 1
 
-    run_with_sudo apt-get install "${packages[@]}" -y
+    run_apt apt-get install "${packages[@]}" -y
 }
 
 update_package_list() {
@@ -327,7 +355,7 @@ update_package_list() {
     fi
     
     local apt_output
-    apt_output=$(run_with_sudo apt-get update 2>&1)
+    apt_output=$(run_apt apt-get update 2>&1)
     local exit_code=$?
     
     apt_emit_command_output "$apt_output" "update"
@@ -499,7 +527,7 @@ upgrade_packages() {
     print_operation_header "🔄 Upgrading installed packages to latest versions..."
     
     local upgrade_output
-    upgrade_output=$(run_with_sudo apt upgrade -y -o Acquire::Retries=3 2>&1)
+    upgrade_output=$(run_apt apt upgrade -y -o Acquire::Retries=3 2>&1)
     local upgrade_exit_code=$?
     
     apt_emit_command_output "$upgrade_output" "upgrade" true
@@ -607,7 +635,7 @@ upgrade_packages() {
         print_warning "apt upgrade failed (exit code $upgrade_exit_code) - retrying with --fix-missing and Acquire::Retries=3 to handle transient network errors..."
         echo
         local fix_missing_output
-        fix_missing_output=$(run_with_sudo apt upgrade -y --fix-missing -o Acquire::Retries=3 2>&1)
+        fix_missing_output=$(run_apt apt upgrade -y --fix-missing -o Acquire::Retries=3 2>&1)
         local fix_missing_exit_code=$?
         apt_emit_command_output "$fix_missing_output" "upgrade"
         if [ $fix_missing_exit_code -eq 0 ]; then
@@ -616,7 +644,7 @@ upgrade_packages() {
             print_warning "Retry with --fix-missing also failed (exit code $fix_missing_exit_code) - attempting one more retry after a short delay..."
             sleep 5
             local final_retry_output
-            final_retry_output=$(run_with_sudo apt upgrade -y --fix-missing -o Acquire::Retries=3 2>&1)
+            final_retry_output=$(run_apt apt upgrade -y --fix-missing -o Acquire::Retries=3 2>&1)
             local final_retry_exit_code=$?
             apt_emit_command_output "$final_retry_output" "upgrade"
             if [ $final_retry_exit_code -eq 0 ]; then
@@ -668,7 +696,7 @@ full_upgrade() {
     print_operation_header "🚀 Starting dist-upgrade operation..."
     
     local dist_upgrade_output
-    dist_upgrade_output=$(run_with_sudo apt-get dist-upgrade -y 2>&1)
+    dist_upgrade_output=$(run_apt apt-get dist-upgrade -y 2>&1)
     local exit_code=$?
     
     apt_emit_command_output "$dist_upgrade_output" "dist-upgrade" true
@@ -700,7 +728,7 @@ cleanup() {
     print_status "🔍 Identifying packages that were automatically installed but are no longer needed"
     
     local autoremove_output
-    autoremove_output=$(run_with_sudo apt-get autoremove -y 2>&1)
+    autoremove_output=$(run_apt apt-get autoremove -y 2>&1)
     local autoremove_exit_code=$?
     
     apt_emit_command_output "$autoremove_output" "autoremove"
@@ -715,7 +743,7 @@ cleanup() {
     print_status "🗄️  Removing cached packages that are no longer available in repositories"
     
     local autoclean_output
-    autoclean_output=$(run_with_sudo apt-get autoclean 2>&1)
+    autoclean_output=$(run_apt apt-get autoclean 2>&1)
     local autoclean_exit_code=$?
     
     apt_emit_command_output "$autoclean_output" "autoclean"
@@ -772,14 +800,14 @@ check_broken_packages() {
         print_status "Package integrity issues detected - attempting automatic repair"
         
         print_operation_header "🔧 Step 1: Attempting to fix broken dependencies..."
-        if run_with_sudo apt-get install -f -y >/dev/null 2>&1; then
+        if run_apt apt-get install -f -y >/dev/null 2>&1; then
             print_success "Successfully fixed broken dependencies"
         else
             print_warning "Some dependency issues could not be automatically resolved"
         fi
         
         print_operation_header "⚙️ Step 2: Configuring partially installed packages..."
-        if run_with_sudo dpkg --configure -a >/dev/null 2>&1; then
+        if run_apt dpkg --configure -a >/dev/null 2>&1; then
             print_success "Successfully configured all pending packages"
         else
             print_warning "Some packages could not be properly configured"

@@ -80,3 +80,55 @@ TABLE
     run list_partially_installed_packages
     [ "$output" = "" ]
 }
+
+# ---------------------------------------------------------------------------
+# run_apt / apt_debconf_is_unattended
+#
+# Regression: a headless run (web backend, timer) still gets a pty from apt, so
+# code.postinst saw `[ -t 1 ]` as true, debconf chose whiptail, and the dialog
+# blocked dpkg indefinitely with no one able to answer it.
+# ---------------------------------------------------------------------------
+
+# Replace run_with_sudo so we can assert on the argv run_apt builds, without
+# invoking sudo.
+stub_run_with_sudo() {
+    run_with_sudo() { echo "$*"; }
+}
+
+@test "run_apt: forces noninteractive debconf in quiet mode" {
+    stub_run_with_sudo
+    QUIET_MODE=true CHECK_ONLY_MODE=false
+    run run_apt apt upgrade -y
+    [[ "$output" == "DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true apt upgrade -y" ]]
+}
+
+@test "run_apt: forces noninteractive debconf in check-only mode" {
+    stub_run_with_sudo
+    QUIET_MODE=false CHECK_ONLY_MODE=true
+    run run_apt apt-get update
+    [[ "$output" == *"DEBIAN_FRONTEND=noninteractive"* ]]
+}
+
+# bats runs with stdin detached, standing in for a headless backend-spawned run.
+@test "run_apt: forces noninteractive debconf when stdin is not a terminal" {
+    stub_run_with_sudo
+    QUIET_MODE=false CHECK_ONLY_MODE=false
+    run run_apt dpkg --configure -a
+    [[ "$output" == "DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true dpkg --configure -a" ]]
+}
+
+@test "apt_debconf_is_unattended: true when stdin is not a terminal" {
+    QUIET_MODE=false CHECK_ONLY_MODE=false
+    run apt_debconf_is_unattended
+    [ "$status" -eq 0 ]
+}
+
+# An interactive operator should still get real debconf prompts.
+@test "run_apt: leaves debconf alone when a terminal is attached" {
+    stub_run_with_sudo
+    QUIET_MODE=false CHECK_ONLY_MODE=false
+    # Force the interactive branch by overriding the interactivity predicate.
+    apt_debconf_is_unattended() { return 1; }
+    run run_apt apt upgrade -y
+    [[ "$output" == "apt upgrade -y" ]]
+}
