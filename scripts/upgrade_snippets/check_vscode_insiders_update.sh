@@ -116,10 +116,18 @@ perform_vscode_version_check() {
     if dpkg_package_needs_configure "$app_name"; then
         local dpkg_state
         dpkg_state=$(dpkg_package_state "$app_name")
+        # Carry the fix in the event itself: no reinstall this snippet can run
+        # will clear a half-configured package, so consumers of the event
+        # (dashboard, widget) must be able to show the command that does —
+        # without hardcoding dpkg knowledge of their own.
+        local remediation
+        remediation="Run 'sudo dpkg --configure -a' to finish the installation and restore $app_name on PATH"
         print_warning "$app_display is installed but its package is $dpkg_state, not configured"
-        print_status "Run 'sudo dpkg --configure -a' to finish the installation and restore $app_name on PATH"
-        emit_summary_event "version_check" "target" "$app_display" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "dpkg_state" "$dpkg_state"
-        ask_continue
+        print_status "$remediation"
+        emit_summary_event "version_check" "target" "$app_display" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "dpkg_state" "$dpkg_state" "remediation" "$remediation"
+        # No ask_continue here: check_vscode_insiders_update already prompts on
+        # every failed version check, and two prompts for one failure is one
+        # too many.
         return 1
     fi
 

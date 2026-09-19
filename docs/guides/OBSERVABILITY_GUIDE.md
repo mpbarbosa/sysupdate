@@ -43,7 +43,9 @@ Every event has these base fields:
 | `source` | `module:function` shorthand |
 
 Additional fields are added per event type. The `summary.updates` event adds
-`summary_name`, `target`, `status`, `current_version`, `latest_version`.
+`summary_name`, `target`, `status`, `current_version`, `latest_version`, and —
+for a status the snippet cannot resolve on its own — an optional `remediation`
+string naming the host-side fix (see rule 1).
 The `terminal.line` event adds `line_type` and `message`.
 
 ## Emitting events in Bash
@@ -73,9 +75,41 @@ automatically — snippets that use it get observability for free.
 
 ### 1. Every version check emits a `summary.updates` event
 
-All snippets that check for updates must emit a `summary.updates` event with
-`status` set to one of `up_to_date`, `update_available`, `ahead_of_latest`,
-or `unknown`. Use `compare_and_report_versions` — it handles this automatically.
+All snippets that check for updates must emit a `summary.updates` event.
+Use `compare_and_report_versions` — it handles the common statuses
+automatically.
+
+`status` must be one of:
+
+| Status | Meaning | How consumers treat it |
+| --- | --- | --- |
+| `up_to_date` | Installed version matches latest | Informational |
+| `update_available` | A newer version exists | Offers an upgrade |
+| `ahead_of_latest` | Installed version is newer than latest | Informational |
+| `self_managed` | Tool updates through its own updater; no trackable latest | Informational, never a failure |
+| `not_installed` | Tool is absent | Retryable — a run may offer to install it |
+| `unknown` | The check itself failed (network, rate limit, broken binary) | Retryable — usually transient |
+| `invalid_installation` | The install is broken (half-configured dpkg package, checkout that is not a git repo) | **Blocked** — not retryable |
+| `insufficient_efi_space` | Host lacks room to stage the update | **Blocked** — not retryable |
+
+A blocked status means re-running the snippet reproduces the identical
+failure: only a change on the host clears it. Emit `remediation` alongside it
+with the exact fix, so consumers can show the command instead of a useless
+retry button:
+
+```bash
+remediation="Run 'sudo dpkg --configure -a' to finish the installation"
+print_status "$remediation"
+emit_summary_event "version_check" \
+    "target" "$app_display" \
+    "status" "invalid_installation" \
+    "current_version" "unknown" \
+    "latest_version" "unknown" \
+    "remediation" "$remediation"
+```
+
+Print the same text with `print_status` as well — the terminal pane scrolls,
+so the event is what survives.
 
 Do not write a snippet that prints version info to stdout only. The backend
 bridge reads only stderr; the web dashboard depends on `summary.updates` to
@@ -151,7 +185,7 @@ CLI never emits? It should not. The bridge routes events; it does not invent the
 - Every snippet produces at least one `summary.updates` event per run.
 - `run_id` appears in every JSON line in the event stream.
 - The dashboard's update inventory populates without manual configuration.
-- `emit_summary_event` status values (`up_to_date`, `update_available`) are
+- `emit_summary_event` status values come from the table in rule 1 and are
   consistent across all snippets.
 - A new snippet added by an LLM uses `compare_and_report_versions` and
   inherits observability automatically.
@@ -161,6 +195,9 @@ CLI never emits? It should not. The bridge routes events; it does not invent the
 - A snippet that prints version info with `echo` instead of `print_status`.
 - A snippet that exits without calling `compare_and_report_versions` or
   `emit_summary_event` — the dashboard shows nothing for that tool.
+- A blocked status (`invalid_installation`, `insufficient_efi_space`) emitted
+  without a `remediation` field — the dashboard can then only say that
+  something is wrong, not what to do about it.
 - `web/backend/server.js` constructing synthetic events with hardcoded
   `event_type` strings.
 - Events with fields containing file paths from `~/.config/` that could

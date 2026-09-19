@@ -6,6 +6,8 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 | --- | --- |
 | `App.tsx` | Sole state controller — WebSocket, run state, update inventory |
 | `types.ts` | All shared interfaces (`UpdateItem`, `BackendRunSnapshot`, `SystemConfig`, …) |
+| `summaryStatus.ts` | Pure CLI-status → card status/severity mapping (+ `summaryStatus.test.ts`) |
+| `updateCard.ts` | Pure card affordances — which button, versions vs remediation (+ `updateCard.test.ts`) |
 | `theme.ts` | Pure theme helpers — no component logic, no React imports |
 | `theme.test.ts` | Vitest unit tests for theme helpers |
 | `components/` | Subcomponents rendered by `App.tsx` |
@@ -19,6 +21,8 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 - Props must be typed with only the fields the component actually uses — not the full `BackendRunSnapshot`
 - Every `useEffect` that opens a WebSocket, subscription, or timer must return a cleanup function
 - All colors and glow classes come from `theme.ts` helpers — no inline hex values in JSX
+- Card button/label/version-row decisions belong in `updateCard.ts`, not in JSX ternaries — they are unit-testable there, and there is no React test renderer in this project
+- A `blocked` item must never render a retry affordance; show the CLI's `remediation` text instead of a version transition
 - Mock data lives in `data/mockData.ts`, never inline in component bodies
 - `ScheduleTask.command` is intended for `sysupdate --snippet <id>` but crontab wiring is not yet implemented
 - `handleRunAll` in `App.tsx` is a stub — only individual snippet upgrades are wired to the live backend

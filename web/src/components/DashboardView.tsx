@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { SystemConfig, TerminalLine, UpdateItem } from '../types';
-import { getSeverityColor, getThemeColorHex } from '../theme';
+import { getActionToneColor, getSeverityColor, getThemeColorHex } from '../theme';
+import { toCardAffordances } from '../updateCard';
 
 interface DashboardViewProps {
   items: UpdateItem[];
@@ -38,13 +39,10 @@ function UpdateItemCard({
 }) {
   const accent = getThemeColorHex(themeColor);
   const severityColor = getSeverityColor(item.severity);
-  const isUpToDate = item.status === 'up_to_date';
-  const isUpdating = item.status === 'updating';
-  const isFailed = item.status === 'failed';
-  // Self-managed tools update via their own updater; no upgrade action, no
-  // meaningful "latest" — render neutrally, never as a failure/RETRY.
-  const isSelfManaged = item.status === 'self_managed';
-  const canUpgrade = Boolean(item.snippetId);
+  // What this card may offer — which button, whether the version transition is
+  // real, and what to show instead (updateCard.ts, unit-tested).
+  const affordances = toCardAffordances(item);
+  const actionColor = getActionToneColor(affordances.actionTone, themeColor);
 
   return (
     <div className="rounded border border-hud-border bg-hud-panel/40 p-3">
@@ -65,45 +63,31 @@ function UpdateItemCard({
         <button
           type="button"
           onClick={() => onUpgrade(item.id)}
-          disabled={isUpToDate || isUpdating || isSelfManaged || !canUpgrade}
+          disabled={!affordances.actionEnabled}
           className="shrink-0 rounded border px-3 py-1 font-mono text-[11px] font-bold uppercase tracking-widest transition-opacity disabled:opacity-50"
-          style={
-            isUpToDate
-              ? { borderColor: '#5c7480', color: '#5c7480' }
-              : isSelfManaged
-                ? { borderColor: '#5c7480', color: '#5c7480' }
-              : !canUpgrade
-                ? { borderColor: '#5c7480', color: '#5c7480' }
-              : isFailed
-                ? { borderColor: '#ff5c5c', color: '#ff5c5c' }
-                : { borderColor: accent, color: accent }
-          }
+          style={{ borderColor: actionColor, color: actionColor }}
         >
-          {isUpToDate
-            ? 'Up to Date'
-            : isUpdating
-              ? 'Updating...'
-              : isSelfManaged
-                ? 'Self-Update'
-                : !canUpgrade
-                  ? 'Unavailable'
-                  : isFailed
-                    ? 'Retry'
-                    : 'Upgrade'}
+          {affordances.actionLabel}
         </button>
       </div>
 
       <p className="mt-2 font-mono text-xs text-slate-400">{item.description}</p>
 
-      <div className="mt-2 flex items-center gap-2 font-mono text-xs">
-        <span className="text-slate-500">{item.currentVersion}</span>
-        {!isUpToDate && !isSelfManaged && (
-          <>
-            <span className="text-slate-600">→</span>
-            <span style={{ color: accent }}>{item.latestVersion}</span>
-          </>
-        )}
-      </div>
+      {affordances.remediation ? (
+        <p className="mt-2 font-mono text-xs" style={{ color: actionColor }}>
+          {affordances.remediation}
+        </p>
+      ) : (
+        <div className="mt-2 flex items-center gap-2 font-mono text-xs">
+          <span className="text-slate-500">{item.currentVersion}</span>
+          {affordances.showVersions && (
+            <>
+              <span className="text-slate-600">→</span>
+              <span style={{ color: accent }}>{item.latestVersion}</span>
+            </>
+          )}
+        </div>
+      )}
 
       {item.changelog.length > 0 && (
         <ul className="mt-2 space-y-0.5 border-l border-hud-border pl-2 font-mono text-[11px] text-slate-500">

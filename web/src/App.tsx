@@ -302,6 +302,13 @@ function App() {
           summary.current_version === undefined ? 'unknown' : String(summary.current_version);
         const latestVersion =
           summary.latest_version === undefined ? currentVersion : String(summary.latest_version);
+        // Optional contract field: the host-side fix the snippet already knows
+        // about (e.g. `sudo dpkg --configure -a`). Passed through verbatim so
+        // the dashboard never has to guess a remedy of its own.
+        const remediation =
+          typeof summary.remediation === 'string' && summary.remediation.trim() !== ''
+            ? summary.remediation.trim()
+            : undefined;
 
         nextItems.push({
           id: override?.id ?? `apps-${slugify(target)}`,
@@ -317,6 +324,7 @@ function App() {
           description:
             override?.description ?? 'Status discovered from the live sysupdate snippet scan.',
           changelog: [],
+          remediation,
         });
         continue;
       }

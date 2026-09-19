@@ -10,11 +10,19 @@ export interface UpdateItem {
   currentVersion: string;
   latestVersion: string;
   typeLabel: string;
-  status: 'ready' | 'up_to_date' | 'updating' | 'failed' | 'self_managed';
+  // 'blocked' = the install itself is broken or the host is out of room; the
+  // snippet cannot fix it, so the card must not offer a retry.
+  status: 'ready' | 'up_to_date' | 'updating' | 'failed' | 'self_managed' | 'blocked';
   severity: 'info' | 'minor' | 'major';
   description: string;
   changelog: string[];
+  // Host-side fix for a 'blocked' item, taken verbatim from the CLI's
+  // `remediation` event field. The dashboard never invents one.
+  remediation?: string;
 }
+
+// Palette role for an update card's action button.
+export type ActionTone = 'accent' | 'muted' | 'danger' | 'warning';
 
 export interface TerminalLine {
   id: string;

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { getThemeColorHex, getThemeGlowClass, getSeverityColor, getFontSizeClass } from './theme';
+import {
+  getThemeColorHex,
+  getThemeGlowClass,
+  getSeverityColor,
+  getActionToneColor,
+  getFontSizeClass,
+} from './theme';
 
 describe('getThemeColorHex', () => {
   it('returns cyan hex for cyan', () => {
@@ -54,6 +60,19 @@ describe('getSeverityColor', () => {
 
   it('returns cyan hex for info severity', () => {
     expect(getSeverityColor('info')).toBe('#00f3ff');
+  });
+});
+
+describe('getActionToneColor', () => {
+  it('follows the active theme color for the accent tone', () => {
+    expect(getActionToneColor('accent', 'magenta')).toBe('#ffabf3');
+    expect(getActionToneColor('accent', 'cyan')).toBe('#00f3ff');
+  });
+
+  it('returns fixed hexes for the non-accent tones', () => {
+    expect(getActionToneColor('muted', 'cyan')).toBe('#5c7480');
+    expect(getActionToneColor('danger', 'cyan')).toBe('#ff5c5c');
+    expect(getActionToneColor('warning', 'cyan')).toBe('#ffb800');
   });
 });
 

@@ -6,9 +6,17 @@ describe('toUpdateStatus', () => {
     expect(toUpdateStatus('update_available')).toBe('ready');
   });
 
-  it('maps failure-ish statuses to failed', () => {
-    for (const s of ['not_installed', 'invalid_installation', 'unknown', 'insufficient_efi_space']) {
+  it('maps retryable failures to failed', () => {
+    for (const s of ['not_installed', 'unknown']) {
       expect(toUpdateStatus(s)).toBe('failed');
+    }
+  });
+
+  it('maps host-side breakage to blocked, not failed', () => {
+    // Re-running the snippet cannot clear either of these, so the card must
+    // not offer a retry.
+    for (const s of ['invalid_installation', 'insufficient_efi_space']) {
+      expect(toUpdateStatus(s)).toBe('blocked');
     }
   });
 

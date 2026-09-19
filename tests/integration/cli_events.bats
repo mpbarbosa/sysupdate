@@ -125,6 +125,36 @@ assert d.get('latest_version') == '2.0.0', f'unexpected latest: {d.get(\"latest_
 }
 
 # ---------------------------------------------------------------------------
+# summary.updates event — fixture-blocked (broken install, not retryable)
+# ---------------------------------------------------------------------------
+
+@test "fixture-blocked emits summary.updates with status=invalid_installation" {
+    run_snippet_events "fixture-blocked"
+    local summary_line
+    summary_line=$(echo "$output" | grep '"event_type":"summary.updates"' | head -1)
+    [ -n "$summary_line" ]
+    echo "$summary_line" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+assert d.get('status') == 'invalid_installation', f'expected invalid_installation, got {d.get(\"status\")}'
+"
+}
+
+@test "summary.updates carries the remediation text verbatim" {
+    run_snippet_events "fixture-blocked"
+    local summary_line
+    summary_line=$(echo "$output" | grep '"event_type":"summary.updates"' | head -1)
+    # Passed through the environment so neither bash nor bats has to re-quote
+    # the single quotes and shell command the remediation text contains.
+    SUMMARY_LINE="$summary_line" python3 - <<'PY'
+import json, os
+d = json.loads(os.environ["SUMMARY_LINE"])
+expected = "Run 'sudo dpkg --configure -a' to finish the installation"
+assert d.get("remediation") == expected, f"unexpected remediation: {d.get('remediation')}"
+PY
+}
+
+# ---------------------------------------------------------------------------
 # CHECK_ONLY_MODE must not invoke the update callback
 # ---------------------------------------------------------------------------
 

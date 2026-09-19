@@ -1,4 +1,4 @@
-import type { SystemConfig, UpdateItem } from './types';
+import type { ActionTone, SystemConfig, UpdateItem } from './types';
 
 /** Hex value for a SystemConfig.themeColor, used for inline accent styling. */
 export const getThemeColorHex = (themeColor: SystemConfig['themeColor']): string => {
@@ -40,6 +40,24 @@ export const getSeverityColor = (severity: UpdateItem['severity']): string => {
     case 'info':
     default:
       return '#00f3ff';
+  }
+};
+
+/** Hex value for an update card's action button, by palette role. */
+export const getActionToneColor = (
+  tone: ActionTone,
+  themeColor: SystemConfig['themeColor'],
+): string => {
+  switch (tone) {
+    case 'muted':
+      return '#5c7480';
+    case 'danger':
+      return '#ff5c5c';
+    case 'warning':
+      return '#ffb800';
+    case 'accent':
+    default:
+      return getThemeColorHex(themeColor);
   }
 };
 
