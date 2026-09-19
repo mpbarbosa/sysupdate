@@ -1,0 +1,6 @@
+# Fixture config for update_fixture_blocked.sh.
+# The remediation text is deliberately full of single quotes and a shell
+# command — the shape real remediation text takes — so the fixture exercises
+# both YAML sourcing and the event stream's JSON escaping.
+remediation:
+  needs_dpkg_configure: "Run 'sudo dpkg --configure -a' to finish the installation"

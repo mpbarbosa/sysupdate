@@ -56,6 +56,42 @@ get_config() {
     echo "$value"
 }
 
+# Resolve the one-line remediation text for a blocking summary status.
+#
+# Blocking statuses (`invalid_installation`, `insufficient_efi_space`, ...) tell
+# the dashboard that sysupdate cannot proceed until a human fixes something on
+# the host. The `remediation` field on the `summary.updates` event carries *what*
+# to fix. The text lives in the snippet's YAML under `remediation.<key>` so the
+# terminal help and the dashboard card stay a single source of truth.
+#
+# Placeholders substituted: {path} (from $2), {repo} (application.git_repo),
+# {branch} (update.branch). Missing keys resolve to an empty string, which
+# callers may still pass through — consumers treat empty as "no remediation".
+#
+# Usage: get_remediation "not_git_repo" "$install_dir"
+get_remediation() {
+    local key="$1"
+    local install_dir="$2"
+
+    local text
+    text=$(get_config "remediation.$key")
+    if [ -z "$text" ]; then
+        echo ""
+        return 0
+    fi
+
+    local repo
+    repo=$(get_config "application.git_repo")
+    local branch
+    branch=$(get_config "update.branch")
+
+    text="${text//\{path\}/$install_dir}"
+    text="${text//\{repo\}/$repo}"
+    text="${text//\{branch\}/$branch}"
+
+    echo "$text"
+}
+
 get_current_version_from_config() {
     local version_cmd
     version_cmd=$(get_config "version.command")

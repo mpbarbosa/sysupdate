@@ -62,3 +62,9 @@ update:
   fix_dependencies: "apt-get install -f -y"
   output_lines: 10
   cleanup_temp: true
+
+# Remediation line for the blocking `invalid_installation` status raised when
+# the .deb is unpacked but never configured. Mirrors the terminal hint in
+# check_vscode_insiders_installed.
+remediation:
+  needs_dpkg_configure: "Run 'sudo dpkg --configure -a' to finish the installation and restore code-insiders on PATH"

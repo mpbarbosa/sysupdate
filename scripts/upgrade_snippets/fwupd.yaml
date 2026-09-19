@@ -59,3 +59,9 @@ firmware:
   # Capped at half the ESP when the partition is smaller than this, so a stock
   # 96-100MB ESP can still pass. fwupd does its own exact per-payload check.
   required_esp_mb: 32
+
+# Remediation line for the blocking `insufficient_efi_space` readiness status.
+# Shown on the dashboard card; mirrors the manual-cleanup advice printed by
+# check_efi_space when automatic cleanup cannot free enough room.
+remediation:
+  insufficient_efi_space: "/boot/efi is too full to stage a firmware capsule — free space there (sudo apt autoremove --purge to drop old kernels, or remove stale vendor directories under /boot/efi/EFI), then re-run the firmware check."

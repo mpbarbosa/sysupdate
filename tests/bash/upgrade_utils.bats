@@ -157,6 +157,40 @@ def456\trefs/tags/latest
 }
 
 # ---------------------------------------------------------------------------
+# get_remediation
+# ---------------------------------------------------------------------------
+
+@test "get_remediation: substitutes path, repo and branch placeholders" {
+    run get_remediation "not_git_repo" "/opt/testapp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "/opt/testapp is not a Git checkout — clone https://example.invalid/testapp.git (branch trunk) next to it" ]
+}
+
+@test "get_remediation: leaves a placeholder-free line untouched" {
+    run get_remediation "no_placeholders" "/opt/testapp"
+    [ "$output" = "Just do the thing" ]
+}
+
+# A snippet without a remediation block must not break the emit site — it
+# reports an empty line and the dashboard falls back to its generic message.
+@test "get_remediation: unknown key yields empty output and exit 0" {
+    run get_remediation "does_not_exist" "/opt/testapp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
+@test "get_remediation: missing config file yields empty output and exit 0" {
+    CONFIG_FILE="/nonexistent/path.yaml" run get_remediation "not_git_repo" "/opt/testapp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
+@test "get_remediation: never emits a multi-line string" {
+    run get_remediation "not_git_repo" "/opt/testapp"
+    [ "${#lines[@]}" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
 # list_upgrade_snippets (snippet discovery)
 # ---------------------------------------------------------------------------
 

@@ -89,3 +89,13 @@ installation:
   reference:
     url: "https://github.com/ohmybash/oh-my-bash"
     wiki: "https://github.com/ohmybash/oh-my-bash/wiki"
+
+# Remediation lines for blocking `summary.updates` statuses. One concise line
+# each, consistent with messages.install_help — the dashboard shows these on the
+# card when a check comes back `invalid_installation`.
+# Deliberately non-destructive: nothing here deletes or overwrites {path}, so a
+# customised install is never thrown away by following the advice.
+remediation:
+  not_git_repo: "{path} is not a Git checkout — re-clone alongside it instead of deleting it: git clone {repo} {path}.new && mv {path} {path}.bak && mv {path}.new {path}, then keep your custom/ directory from {path}.bak."
+  empty_git_repo: "The checkout at {path} has no commits — add the origin remote if missing, then restore the history in place: git -C {path} fetch origin {branch} && git -C {path} reset --hard origin/{branch}"
+  missing_git_remote: "The checkout at {path} has no origin remote — point it back at upstream: git -C {path} remote add origin {repo}, then re-run this update."

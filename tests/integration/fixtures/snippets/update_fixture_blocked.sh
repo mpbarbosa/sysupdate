@@ -13,9 +13,16 @@ _repo_root="$(cd "$_fixture_dir/../../../.." && pwd)"
 source "$_repo_root/scripts/lib/upgrade_utils.sh"
 
 _update_fixture_blocked() {
-    # Single quotes and a shell command inside the value: this is exactly the
-    # shape real remediation text takes, so it exercises the JSON escaping.
-    local remediation="Run 'sudo dpkg --configure -a' to finish the installation"
+    # Resolved from YAML through get_remediation, the way real snippets do it.
+    # `local` so the fixture does not leak CONFIG_FILE into other snippets;
+    # Bash's dynamic scoping still exposes it to get_remediation/get_config.
+    # The value holds single quotes and a shell command — exactly the shape
+    # real remediation text takes, so this exercises the JSON escaping too.
+    local CONFIG_FILE="$_fixture_dir/fixture_blocked.yaml"
+
+    local remediation
+    remediation=$(get_remediation "needs_dpkg_configure" "")
+
     emit_summary_event "version_check" \
         "target" "Fixture Blocked" \
         "status" "invalid_installation" \

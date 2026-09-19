@@ -164,7 +164,9 @@ check_httpinspect_ready() {
     if ! is_httpinspect_git_checkout; then
         local not_git_msg
         not_git_msg=$(get_config "messages.not_git_repo")
-        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown"
+        local remediation
+        remediation=$(get_remediation "not_git_repo" "$install_dir")
+        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "remediation" "$remediation"
         print_warning "$not_git_msg"
         show_httpinspect_install_help
         return 3
@@ -173,7 +175,9 @@ check_httpinspect_ready() {
     if ! has_httpinspect_commit_history; then
         local empty_repo_msg
         empty_repo_msg=$(get_config "messages.empty_git_repo")
-        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown"
+        local remediation
+        remediation=$(get_remediation "empty_git_repo" "$install_dir")
+        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "remediation" "$remediation"
         print_warning "$empty_repo_msg"
         show_httpinspect_install_help
         return 3
@@ -182,7 +186,9 @@ check_httpinspect_ready() {
     if ! has_httpinspect_origin_remote; then
         local missing_remote_msg
         missing_remote_msg=$(get_config "messages.missing_git_remote")
-        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown"
+        local remediation
+        remediation=$(get_remediation "missing_git_remote" "$install_dir")
+        emit_summary_event "version_check" "target" "httpinspect" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "remediation" "$remediation"
         print_warning "$missing_remote_msg"
         show_httpinspect_install_help
         return 3

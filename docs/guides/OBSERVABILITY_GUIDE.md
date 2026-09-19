@@ -98,7 +98,8 @@ with the exact fix, so consumers can show the command instead of a useless
 retry button:
 
 ```bash
-remediation="Run 'sudo dpkg --configure -a' to finish the installation"
+local remediation
+remediation=$(get_remediation "needs_dpkg_configure" "$install_dir")
 print_status "$remediation"
 emit_summary_event "version_check" \
     "target" "$app_display" \
@@ -110,6 +111,28 @@ emit_summary_event "version_check" \
 
 Print the same text with `print_status` as well — the terminal pane scrolls,
 so the event is what survives.
+
+Three rules for the text itself:
+
+- **Read it from YAML, never hardcode it.** Put it under a top-level
+  `remediation:` key in the snippet's config and resolve it with
+  `get_remediation "<key>" "<install_dir>"` (`upgrade_utils.sh`), which
+  substitutes `{path}`, `{repo}` (`application.git_repo`) and `{branch}`
+  (`update.branch`). A snippet that also prints install help would otherwise
+  keep two copies of the same advice, and they drift. Unknown keys and configs
+  without a `remediation:` block resolve to an empty string, so the emit site
+  never breaks.
+- **One line.** It renders as a single line of card text — no newlines, no
+  multi-step blocks. The long form belongs in `messages.install_help`, which
+  the snippet already prints to the terminal.
+- **Never advise anything destructive.** A reinstall that overwrites a
+  customised directory is not a remediation. Prefer an in-place repair, or a
+  side-by-side re-clone that leaves the original where it is for the user to
+  copy their config out of.
+
+`tests/integration/fixtures/snippets/update_fixture_blocked.sh` is the
+reference shape; `tests/bash/upgrade_utils.bats` covers `get_remediation`
+itself.
 
 Do not write a snippet that prints version info to stdout only. The backend
 bridge reads only stderr; the web dashboard depends on `summary.updates` to

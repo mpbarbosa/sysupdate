@@ -144,10 +144,28 @@ const PACKAGE_MANAGER_SUMMARY_CONFIG: Record<
     typeLabel: 'device firmware',
     description: 'Firmware update inventory discovered from the live sysupdate fwupd check.',
   },
+  // fwupd emits a second summary when it found updates but cannot stage them
+  // (e.g. a full ESP). Same card id as firmware_updates on purpose: it is the
+  // same device-firmware row, and the readiness verdict is the later, more
+  // specific word on it, so it supersedes the inventory entry.
+  firmware_readiness: {
+    id: 'manager-firmware',
+    name: 'Firmware updates',
+    snippetId: 'fwupd',
+    category: 'system',
+    typeLabel: 'device firmware',
+    description: 'Firmware update readiness reported by the live sysupdate fwupd check.',
+  },
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+// Optional contract field: the host-side fix the snippet already knows about
+// (e.g. `sudo dpkg --configure -a`). Passed through verbatim so the dashboard
+// never has to guess a remedy of its own.
+const readRemediation = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
 
 const asRunSnapshot = (value: unknown): BackendRunSnapshot | null => {
   return isRecord(value) ? (value as unknown as BackendRunSnapshot) : null;
@@ -302,13 +320,7 @@ function App() {
           summary.current_version === undefined ? 'unknown' : String(summary.current_version);
         const latestVersion =
           summary.latest_version === undefined ? currentVersion : String(summary.latest_version);
-        // Optional contract field: the host-side fix the snippet already knows
-        // about (e.g. `sudo dpkg --configure -a`). Passed through verbatim so
-        // the dashboard never has to guess a remedy of its own.
-        const remediation =
-          typeof summary.remediation === 'string' && summary.remediation.trim() !== ''
-            ? summary.remediation.trim()
-            : undefined;
+        const remediation = readRemediation(summary.remediation);
 
         nextItems.push({
           id: override?.id ?? `apps-${slugify(target)}`,
@@ -352,15 +364,15 @@ function App() {
         status: toUpdateStatus(summary.status),
         severity: toSeverity(summary.status, totalUpdates),
         changelog: [],
+        remediation: readRemediation(summary.remediation),
       });
     }
 
     setUpdateItems((previous) => {
-      if (replaceExisting) {
-        return nextItems;
-      }
-
-      const mergedItems = new Map(previous.map((item) => [item.id, item]));
+      // Two summaries can legitimately describe the same card (fwupd emits both
+      // firmware_updates and firmware_readiness), so collapse by id — last one
+      // in the run wins — before this becomes React's keyed list.
+      const mergedItems = new Map(replaceExisting ? [] : previous.map((item) => [item.id, item]));
       nextItems.forEach((item) => {
         mergedItems.set(item.id, item);
       });

@@ -119,9 +119,11 @@ perform_vscode_version_check() {
         # Carry the fix in the event itself: no reinstall this snippet can run
         # will clear a half-configured package, so consumers of the event
         # (dashboard, widget) must be able to show the command that does —
-        # without hardcoding dpkg knowledge of their own.
+        # without hardcoding dpkg knowledge of their own. The text comes from
+        # the YAML so the line printed here and the line shown on the card
+        # cannot drift apart.
         local remediation
-        remediation="Run 'sudo dpkg --configure -a' to finish the installation and restore $app_name on PATH"
+        remediation=$(get_remediation "needs_dpkg_configure" "")
         print_warning "$app_display is installed but its package is $dpkg_state, not configured"
         print_status "$remediation"
         emit_summary_event "version_check" "target" "$app_display" "status" "invalid_installation" "current_version" "unknown" "latest_version" "unknown" "dpkg_state" "$dpkg_state" "remediation" "$remediation"

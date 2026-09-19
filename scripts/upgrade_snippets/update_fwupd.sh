@@ -258,7 +258,9 @@ check_firmware_updates() {
 
         # Check EFI space before prompting
         if ! check_efi_space; then
-            emit_summary_event "firmware_readiness" "target" "fwupd" "status" "insufficient_efi_space"
+            local efi_remediation
+            efi_remediation=$(get_remediation "insufficient_efi_space" "/boot/efi")
+            emit_summary_event "firmware_readiness" "target" "fwupd" "status" "insufficient_efi_space" "remediation" "$efi_remediation"
             print_warning "Cannot proceed with firmware update due to insufficient space"
             return 1
         fi
