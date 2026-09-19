@@ -5,6 +5,11 @@
 
 setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+    # These suites assert the headless code paths — the ones guarded by
+    # `[ -t 0 ]`. bats does NOT detach stdin: launched from an interactive
+    # shell, fd 0 is the operator's terminal and those branches invert. Pin it
+    # so the result does not depend on how the suite was started.
+    exec 0</dev/null
     FIXTURES_DIR="$(dirname "$BATS_TEST_FILENAME")/fixtures"
     export NO_COLOR=1
     # upgrade_utils.sh sources core_lib.sh internally
