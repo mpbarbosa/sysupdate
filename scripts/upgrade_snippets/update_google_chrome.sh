@@ -32,13 +32,24 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$CHROME_SCRIPT_DIR/google_chrome.yaml"
 
+CHROME_KEYRING_FILE="/usr/share/keyrings/google-chrome.gpg"
+CHROME_REPO_URL="dl.google.com/linux/chrome"
+
+# True when any enabled apt source already serves Chrome, in whichever shape.
+# Chrome's own postinst maintains a deb822 `google-chrome.sources`, and
+# Ubuntu's deb822 migration rewrites an old `google-chrome.list` into one
+# (parking the original as `google-chrome.list.disabled`). Testing only for
+# the `.list` this snippet writes reads a configured machine as unconfigured.
+chrome_repository_is_configured() {
+    apt_repository_is_configured "$CHROME_REPO_URL"
+}
+
 # Setup Chrome repository if not already configured
 setup_chrome_repository() {
-    local repo_file="/etc/apt/sources.list.d/google-chrome.list"
-    local keyring_file="/usr/share/keyrings/google-chrome.gpg"
+    local keyring_file="$CHROME_KEYRING_FILE"
     
     # Check if repository is already configured
-    if [[ -f "$repo_file" ]] && [[ -f "$keyring_file" ]]; then
+    if chrome_repository_is_configured && [[ -f "$keyring_file" ]]; then
         local already_msg
         already_msg=$(get_config "messages.already_installed")
         print_status "$already_msg"
@@ -47,28 +58,42 @@ setup_chrome_repository() {
     
     print_section_header "Setting up Google Chrome repository"
     
-    # Add signing key
-    local key_desc
-    key_desc=$(get_config "update.pre_install_steps[0].description")
-    local key_cmd
-    key_cmd=$(get_config "update.pre_install_steps[0].command")
-    
-    print_status "$key_desc..."
-    if ! eval "$key_cmd"; then
-        print_error "Failed to add Google signing key"
-        return 1
+    # Add signing key, but only when it is actually missing. Re-running the
+    # dearmor over an existing keyring makes gpg ask "File exists. Overwrite?
+    # (y/N)" on a terminal nobody is reading when sysupdate was spawned
+    # headlessly by the web backend, and the run blocks there indefinitely.
+    if [[ -f "$keyring_file" ]]; then
+        print_status "Google signing key already present at $keyring_file - keeping it"
+    else
+        local key_desc
+        key_desc=$(get_config "update.pre_install_steps[0].description")
+        local key_cmd
+        key_cmd=$(get_config "update.pre_install_steps[0].command")
+        
+        print_status "$key_desc..."
+        if ! eval "$key_cmd"; then
+            print_error "Failed to add Google signing key"
+            return 1
+        fi
     fi
     
-    # Add repository
-    local repo_desc
-    repo_desc=$(get_config "update.pre_install_steps[1].description")
-    local repo_cmd
-    repo_cmd=$(get_config "update.pre_install_steps[1].command")
-    
-    print_status "$repo_desc..."
-    if ! eval "$repo_cmd"; then
-        print_error "Failed to configure Chrome repository"
-        return 1
+    # Add the repository only when nothing already serves it. Writing our
+    # `.list` next to a live `google-chrome.sources` leaves the machine
+    # fetching Chrome twice on every apt update, and resurrects the legacy
+    # entry the deb822 migration deliberately disabled.
+    if chrome_repository_is_configured; then
+        print_status "Chrome repository already served by an existing apt source - not adding a duplicate"
+    else
+        local repo_desc
+        repo_desc=$(get_config "update.pre_install_steps[1].description")
+        local repo_cmd
+        repo_cmd=$(get_config "update.pre_install_steps[1].command")
+        
+        print_status "$repo_desc..."
+        if ! eval "$repo_cmd"; then
+            print_error "Failed to configure Chrome repository"
+            return 1
+        fi
     fi
     
     # Update package cache
@@ -192,7 +217,7 @@ update_google_chrome() {
     fi
     
     # Check if repository is configured (might be manual install)
-    if [[ ! -f "/etc/apt/sources.list.d/google-chrome.list" ]]; then
+    if ! chrome_repository_is_configured; then
         print_warning "Chrome repository not configured. Setting up for future updates..."
         if ! setup_chrome_repository; then
             ask_continue

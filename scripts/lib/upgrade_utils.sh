@@ -663,6 +663,50 @@ detect_available_package_managers() {
     echo "$managers" | xargs
 }
 
+# Locations apt actually reads. Overridable so the suites can point at a
+# fixture tree instead of the real /etc.
+APT_SOURCES_LIST_FILE="${APT_SOURCES_LIST_FILE:-/etc/apt/sources.list}"
+APT_SOURCES_LIST_DIR="${APT_SOURCES_LIST_DIR:-/etc/apt/sources.list.d}"
+
+# True when some enabled apt source points at the given URL substring.
+# Usage: apt_repository_is_configured "dl.google.com/linux/chrome"
+#
+# A snippet must not decide this by testing for the one file it happens to
+# write. The same repository legitimately lives in several shapes: the
+# one-line `foo.list`, or the deb822 `foo.sources` that upstream postinsts now
+# ship and that Ubuntu's deb822 migration rewrites old .list files into —
+# leaving the original behind as `foo.list.disabled`. Probing for `foo.list`
+# alone sees "not configured" on a perfectly configured machine and writes a
+# second, duplicate entry for the same repository.
+#
+# Only live sources count. The globs below skip the `.disabled` and `.save`
+# leftovers apt does not read, commented-out .list lines do not match, and a
+# deb822 stanza turned off with `Enabled: no` is ignored.
+apt_repository_is_configured() {
+    local url_substring="$1"
+    local pattern file
+
+    [ -n "$url_substring" ] || return 1
+    # Read the substring literally: URLs are full of dots.
+    pattern=$(printf '%s' "$url_substring" | sed 's#[][\\.*^$(){}?+|]#\\&#g')
+
+    for file in "$APT_SOURCES_LIST_FILE" "$APT_SOURCES_LIST_DIR"/*.list; do
+        [ -f "$file" ] || continue
+        if grep -Eq "^[[:space:]]*deb(-src)?[[:space:]].*${pattern}" "$file"; then
+            return 0
+        fi
+    done
+
+    for file in "$APT_SOURCES_LIST_DIR"/*.sources; do
+        [ -f "$file" ] || continue
+        grep -Eq "^[[:space:]]*URIs:.*${pattern}" "$file" || continue
+        grep -Eqi "^[[:space:]]*Enabled:[[:space:]]*(no|false)" "$file" && continue
+        return 0
+    done
+
+    return 1
+}
+
 #=============================================================================
 # VERSION CHECKING FUNCTIONS
 #=============================================================================

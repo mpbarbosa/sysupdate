@@ -415,3 +415,107 @@ stub_dpkg_query() {
     run dpkg_package_needs_configure somepkg
     [ "$status" -ne 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# apt_repository_is_configured
+# ---------------------------------------------------------------------------
+
+# Build a fake /etc/apt tree and point the helper at it.
+setup_apt_sources_tree() {
+    APT_SOURCES_LIST_DIR="$BATS_TEST_TMPDIR/sources.list.d"
+    APT_SOURCES_LIST_FILE="$BATS_TEST_TMPDIR/sources.list"
+    mkdir -p "$APT_SOURCES_LIST_DIR"
+    : > "$APT_SOURCES_LIST_FILE"
+}
+
+@test "apt_repository_is_configured: finds a one-line .list entry" {
+    setup_apt_sources_tree
+    echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_repository_is_configured: finds a deb822 .sources stanza" {
+    setup_apt_sources_tree
+    cat > "$APT_SOURCES_LIST_DIR/google-chrome.sources" <<'SOURCES'
+Types: deb
+URIs: https://dl.google.com/linux/chrome-stable/deb/
+Suites: stable
+Components: main
+SOURCES
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -eq 0 ]
+}
+
+# The exact shape this machine was in when the chrome snippet re-added a
+# duplicate .list: the deb822 migration had parked the old entry as
+# `.list.disabled`, which apt does not read and neither must we.
+@test "apt_repository_is_configured: ignores .list.disabled and .save leftovers" {
+    setup_apt_sources_tree
+    echo '# deb http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list.disabled"
+    echo 'deb http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list.save"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: ignores a commented-out .list line" {
+    setup_apt_sources_tree
+    echo '# deb http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: ignores a deb822 stanza disabled with Enabled: no" {
+    setup_apt_sources_tree
+    cat > "$APT_SOURCES_LIST_DIR/google-chrome.sources" <<'SOURCES'
+Types: deb
+URIs: https://dl.google.com/linux/chrome-stable/deb/
+Suites: stable
+Enabled: no
+SOURCES
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: finds an entry in the main sources.list" {
+    setup_apt_sources_tree
+    echo 'deb http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_FILE"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_repository_is_configured: false on an empty sources tree" {
+    setup_apt_sources_tree
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: does not match another vendor's repository" {
+    setup_apt_sources_tree
+    echo 'deb https://packages.mozilla.org/apt mozilla main' \
+        > "$APT_SOURCES_LIST_DIR/mozilla.list"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+# The substring is a URL, not a pattern: dots must not act as wildcards.
+@test "apt_repository_is_configured: treats the URL substring literally" {
+    setup_apt_sources_tree
+    echo 'deb http://dlxgooglexcom/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/lookalike.list"
+    run apt_repository_is_configured "dl.google.com/linux/chrome"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: false when given no URL substring" {
+    setup_apt_sources_tree
+    echo 'deb http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list"
+    run apt_repository_is_configured ""
+    [ "$status" -ne 0 ]
+}

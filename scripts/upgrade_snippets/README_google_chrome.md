@@ -56,7 +56,7 @@ The script follows Google's official installation procedure:
 1. **Add Signing Key**
    ```bash
    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | \
-     sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+     sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/google-chrome.gpg
    ```
 
 2. **Configure Repository**
