@@ -519,3 +519,65 @@ SOURCES
     run apt_repository_is_configured ""
     [ "$status" -ne 0 ]
 }
+
+# The firefox snippet asks the same question about Mozilla's host, and hit the
+# same wrong answer: it grepped `mozilla.list` alone, so a deb822-migrated
+# machine read as unconfigured and the snippet appended a duplicate entry.
+
+@test "apt_repository_is_configured: finds Mozilla's signed-by .list entry" {
+    setup_apt_sources_tree
+    echo 'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+        > "$APT_SOURCES_LIST_DIR/mozilla.list"
+    run apt_repository_is_configured "packages.mozilla.org"
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_repository_is_configured: finds Mozilla's deb822 mozilla.sources" {
+    setup_apt_sources_tree
+    cat > "$APT_SOURCES_LIST_DIR/mozilla.sources" <<'SOURCES'
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Signed-By: /etc/apt/keyrings/packages.mozilla.org.asc
+SOURCES
+    run apt_repository_is_configured "packages.mozilla.org"
+    [ "$status" -eq 0 ]
+}
+
+# Exactly what the deb822 migration leaves behind: the live source is the
+# .sources file, the original .list is parked as .list.disabled. The old
+# one-file grep saw "configured" here only by reading a file apt ignores.
+@test "apt_repository_is_configured: true for a deb822-migrated Mozilla source with the .list parked" {
+    setup_apt_sources_tree
+    echo 'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+        > "$APT_SOURCES_LIST_DIR/mozilla.list.disabled"
+    cat > "$APT_SOURCES_LIST_DIR/mozilla.sources" <<'SOURCES'
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+SOURCES
+    run apt_repository_is_configured "packages.mozilla.org"
+    [ "$status" -eq 0 ]
+}
+
+# A machine with Firefox from Ubuntu only: nothing serves Mozilla, so the
+# snippet is right to set the repository up.
+@test "apt_repository_is_configured: false when only Ubuntu's own sources are present" {
+    setup_apt_sources_tree
+    cat > "$APT_SOURCES_LIST_FILE" <<'LIST'
+deb http://archive.ubuntu.com/ubuntu noble main restricted
+deb http://security.ubuntu.com/ubuntu noble-security main restricted
+LIST
+    run apt_repository_is_configured "packages.mozilla.org"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_repository_is_configured: does not match Mozilla's host against a Chrome-only tree" {
+    setup_apt_sources_tree
+    echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' \
+        > "$APT_SOURCES_LIST_DIR/google-chrome.list"
+    run apt_repository_is_configured "packages.mozilla.org"
+    [ "$status" -ne 0 ]
+}
