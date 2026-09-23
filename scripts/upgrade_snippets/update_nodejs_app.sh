@@ -111,14 +111,14 @@ perform_nodejs_app_update() {
     local update_prompt
     update_prompt=$(get_config "prompts.confirm_update.message")
     if ! prompt_yes_no "$update_prompt"; then
-        print_info "Update cancelled by user"
+        print_status "Update cancelled by user"
         return 0
     fi
     
     print_operation_header "Updating $display_name from source"
     
     # Step 1: Pull latest changes
-    print_step "1" "Pulling latest changes from repository"
+    print_status "Step 1: Pulling latest changes from repository"
     cd "$app_dir" || { print_error "Failed to change directory to $app_dir"; return 1; }
     
     local git_pull_cmd
@@ -130,7 +130,7 @@ perform_nodejs_app_update() {
     print_success "Successfully pulled latest changes"
     
     # Step 2: Install/update dependencies
-    print_step "2" "Installing/updating npm dependencies"
+    print_status "Step 2: Installing/updating npm dependencies"
     local npm_install_cmd
     npm_install_cmd=$(get_config "update.npm_install_command")
     if ! eval "$npm_install_cmd"; then
@@ -143,7 +143,7 @@ perform_nodejs_app_update() {
     local build_cmd
     build_cmd=$(get_config "update.build_command")
     if [ -n "$build_cmd" ] && [ "$build_cmd" != "null" ]; then
-        print_step "3" "Building application"
+        print_status "Step 3: Building application"
         if ! eval "$build_cmd"; then
             print_error "Failed to build application"
             return 1
@@ -158,7 +158,7 @@ perform_nodejs_app_update() {
         local restart_prompt
         restart_prompt=$(get_config "prompts.restart_service.message")
         if prompt_yes_no "$restart_prompt"; then
-            print_step "4" "Restarting service"
+            print_status "Step 4: Restarting service"
             if ! eval "$restart_cmd"; then
                 print_error "Failed to restart service"
                 return 1

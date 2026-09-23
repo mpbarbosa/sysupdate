@@ -189,7 +189,7 @@ build_nodejs_from_source() {
     cd "$build_dir" || return 1
     
     # Clone repository
-    print_step "1" "Cloning Node.js repository"
+    print_status "Step 1: Cloning Node.js repository"
     if ! git clone --depth 1 --branch "v${version}" https://github.com/nodejs/node.git; then
         print_error "Failed to clone Node.js repository"
         cleanup_build_directory "$build_dir" "$original_dir"
@@ -200,7 +200,7 @@ build_nodejs_from_source() {
     cd node || return 1
     
     # Configure
-    print_step "2" "Configuring build"
+    print_status "Step 2: Configuring build"
     if ! ./configure; then
         print_error "Configuration failed"
         cleanup_build_directory "$build_dir" "$original_dir"
@@ -209,7 +209,7 @@ build_nodejs_from_source() {
     print_success "Configuration complete"
     
     # Build (this takes a long time)
-    print_step "3" "Building Node.js (this may take 20-60 minutes)"
+    print_status "Step 3: Building Node.js (this may take 20-60 minutes)"
     print_warning "Building Node.js from source is very time-consuming. Consider using binaries instead."
     
     local cores
@@ -224,7 +224,7 @@ build_nodejs_from_source() {
     print_success "Build complete"
     
     # Install
-    print_step "4" "Installing Node.js"
+    print_status "Step 4: Installing Node.js"
     if ! sudo make install; then
         print_error "Installation failed"
         cleanup_build_directory "$build_dir" "$original_dir"
