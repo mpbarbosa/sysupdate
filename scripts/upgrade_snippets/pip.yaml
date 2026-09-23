@@ -1,0 +1,14 @@
+# pip.yaml - configuration for pip_manager.sh
+#
+# pip_manager.sh is not a config-driven snippet: it has no single application,
+# version source or install command, so this file carries only the remediation
+# text for the blocking statuses it can report. Keeping that text here rather
+# than inline in the script keeps the terminal help and the dashboard card a
+# single source of truth (see get_remediation in lib/upgrade_utils.sh).
+
+# Remediation lines for blocking `pip_updates` statuses.
+remediation:
+  # Emitted when the interpreter carries a PEP 668 EXTERNALLY-MANAGED marker
+  # and this pip is too old (< 23.0.1) to accept --break-system-packages, so
+  # there is no in-place upgrade path left for the user site.
+  externally_managed: "This Python is externally managed (PEP 668) and pip is too old for --break-system-packages — upgrade pip itself, or move these packages into a venv (python3 -m venv) or pipx."

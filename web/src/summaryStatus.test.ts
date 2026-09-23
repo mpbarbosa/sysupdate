@@ -15,7 +15,7 @@ describe('toUpdateStatus', () => {
   it('maps host-side breakage to blocked, not failed', () => {
     // Re-running the snippet cannot clear either of these, so the card must
     // not offer a retry.
-    for (const s of ['invalid_installation', 'insufficient_efi_space']) {
+    for (const s of ['invalid_installation', 'insufficient_efi_space', 'externally_managed']) {
       expect(toUpdateStatus(s)).toBe('blocked');
     }
   });
@@ -40,6 +40,13 @@ describe('toSeverity', () => {
   it('failure-ish statuses are major', () => {
     expect(toSeverity('unknown')).toBe('major');
     expect(toSeverity('not_installed')).toBe('major');
+    expect(toSeverity('externally_managed')).toBe('major');
+  });
+
+  it('externally_managed stays major even with a pending update count', () => {
+    // pip reports the count it found alongside the block; that count must not
+    // downgrade the badge to the ordinary "minor / N updates" look.
+    expect(toSeverity('externally_managed', 8)).toBe('major');
   });
 
   it('self_managed is info, never major', () => {

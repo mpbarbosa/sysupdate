@@ -10,10 +10,12 @@ export function toUpdateStatus(status: unknown): UpdateItem['status'] {
       return 'ready';
     // Deterministic host-side problems: re-running the snippet reproduces the
     // identical failure, because only a change on the host (dpkg --configure,
-    // reinstalling a mangled checkout, freeing ESP space) clears them. They
-    // are blocked, not retryable — see toCardAffordances in updateCard.ts.
+    // reinstalling a mangled checkout, freeing ESP space, moving packages into
+    // a venv) clears them. They are blocked, not retryable — see
+    // toCardAffordances in updateCard.ts.
     case 'invalid_installation':
     case 'insufficient_efi_space':
+    case 'externally_managed':
       return 'blocked';
     // These can succeed on a second try: a not-installed tool may be offered
     // an install, and 'unknown' is usually a transient network/rate-limit miss.
@@ -40,7 +42,8 @@ export function toSeverity(status: unknown, totalUpdates?: number): UpdateItem['
     status === 'not_installed' ||
     status === 'invalid_installation' ||
     status === 'unknown' ||
-    status === 'insufficient_efi_space'
+    status === 'insufficient_efi_space' ||
+    status === 'externally_managed'
   ) {
     return 'major';
   }

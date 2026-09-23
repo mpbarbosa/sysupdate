@@ -113,9 +113,13 @@ a `.sh` file, optionally paired with a `.yaml` config of the same base name.
   flow is `config_driven_version_check` (reads `application.*`, `version.*`, supports
   `version.source` of `github`, `github_tags`, `npm`, `apt`) followed by `handle_update_prompt`,
   `handle_installer_script_update`, or `handle_deb_package_update` depending on `update.method`.
-- Some snippets are plain manager modules without YAML (`cargo_manager.sh`, `pip_manager.sh`,
-  `npm_manager.sh`, `snap_manager.sh`) — they define their own `update_*_packages` function and
-  rely only on `core_lib.sh`.
+- Some snippets are plain manager modules rather than config-driven ones (`cargo_manager.sh`,
+  `pip_manager.sh`, `npm_manager.sh`, `snap_manager.sh`) — they define their own
+  `update_*_packages` function instead of using `config_driven_version_check`. `cargo_manager.sh`,
+  `npm_manager.sh` and `snap_manager.sh` have no YAML and rely only on `core_lib.sh`;
+  `pip_manager.sh` sources `lib/upgrade_utils.sh` for the PEP 668 probes and the pip output
+  classifier, and carries a `pip.yaml` holding only `remediation:` text (no `application.*` or
+  `version.*` blocks).
 - `upgrade_snippets/examples/` contains example YAML configs (e.g. for `nodejs_app.yaml`).
   `upgrade_snippets/QUICK_REFERENCE.md` and the various `README_*.md`/`REQUIREMENTS_*.md` files
   document specific snippet families (Node.js runtime vs Node.js app updates, GDB, fwupd, Google

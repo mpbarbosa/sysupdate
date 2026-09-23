@@ -1279,3 +1279,96 @@ show_installation_info() {
     
     echo ""
 }
+
+#=============================================================================
+# PIP ENVIRONMENT (PEP 668 externally-managed interpreters)
+#=============================================================================
+#
+# Debian/Ubuntu ship an EXTERNALLY-MANAGED marker in the stdlib directory, so
+# every `pip install` — including `--user`, which only ever writes to
+# ~/.local — refuses to run until `--break-system-packages` is passed. Without
+# that flag the pip snippet fails 100% of its packages instantly and has no
+# error text left to explain why, so the probes and the output classifier live
+# here where they are side-effect free and unit-testable.
+
+# Does the interpreter backing pip carry a PEP 668 EXTERNALLY-MANAGED marker?
+# Probes python3's own stdlib path rather than globbing /usr/lib, so it stays
+# correct for pyenv/conda interpreters and for a future Python minor bump.
+# A wrong answer degrades gracefully in both directions: a missed marker just
+# means the install fails with its real reason reported, and a false positive
+# only adds a flag that is a no-op on an unmanaged interpreter.
+# Usage: pip_environment_is_externally_managed
+# Returns: 0 when the marker is present, 1 otherwise
+pip_environment_is_externally_managed() {
+    local stdlib
+    stdlib=$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))' 2>/dev/null) || return 1
+    [ -n "$stdlib" ] && [ -f "$stdlib/EXTERNALLY-MANAGED" ]
+}
+
+# Does this pip understand --break-system-packages? The flag arrived in pip
+# 23.0.1; passing it to an older pip is a hard "no such option" error, so the
+# capability is probed rather than assumed from a parsed version string.
+# Usage: pip_supports_break_system_packages "<pip_bin>"
+# Returns: 0 when supported, 1 otherwise
+pip_supports_break_system_packages() {
+    local pip_bin="${1:-pip3}"
+    "$pip_bin" install --help 2>/dev/null | grep -q -- '--break-system-packages'
+}
+
+# Pure matcher: did this pip output fail the PEP 668 guard? Kept separate from
+# the probe above so a failure can be attributed after the fact, even when the
+# marker probe guessed wrong.
+# Usage: pip_output_is_externally_managed "<captured pip output>"
+# Returns: 0 if the signature is present, 1 otherwise
+pip_output_is_externally_managed() {
+    printf '%s' "$1" | grep -qiE 'externally[- ]managed[- ]environment|This environment is externally managed'
+}
+
+# Pure classifier: reduce captured pip output to one human-readable cause.
+# The snippet prints this next to the package name instead of guessing, so a
+# PEP 668 refusal is never reported as a missing compiler.
+# Usage: pip_failure_reason "<captured pip output>"
+# Returns: always 0; prints a single line
+pip_failure_reason() {
+    local output="$1"
+
+    if pip_output_is_externally_managed "$output"; then
+        printf '%s\n' 'externally-managed environment (PEP 668)'
+        return 0
+    fi
+
+    if printf '%s' "$output" | grep -qiE 'Failed building wheel|Microsoft Visual C\+\+|Python\.h: No such file|error: command .* failed with exit|gcc: (error|not found)'; then
+        printf '%s\n' 'build failed — needs compiler/headers'
+        return 0
+    fi
+
+    if printf '%s' "$output" | grep -qiE 'Temporary failure in name resolution|Read timed out|Connection (refused|reset)|Network is unreachable|Max retries exceeded'; then
+        printf '%s\n' 'network error reaching the package index'
+        return 0
+    fi
+
+    if printf '%s' "$output" | grep -qiE 'ResolutionImpossible|conflicting dependencies|dependency conflicts'; then
+        printf '%s\n' 'dependency conflict'
+        return 0
+    fi
+
+    if printf '%s' "$output" | grep -qiE 'No matching distribution found|Could not find a version'; then
+        printf '%s\n' 'no matching distribution for this Python'
+        return 0
+    fi
+
+    if printf '%s' "$output" | grep -qiE 'Permission denied|\[Errno 13\]|Read-only file system'; then
+        printf '%s\n' 'permission denied writing the target directory'
+        return 0
+    fi
+
+    # Nothing recognised: echo pip's own last meaningful line rather than
+    # inventing a cause. Better an unfamiliar message than a wrong diagnosis.
+    local last
+    last=$(printf '%s\n' "$output" | grep -vE '^[[:space:]]*$' | tail -n 1 | cut -c1-160)
+    if [ -n "$last" ]; then
+        printf '%s\n' "$last"
+    else
+        printf '%s\n' 'pip exited non-zero with no output'
+    fi
+}
