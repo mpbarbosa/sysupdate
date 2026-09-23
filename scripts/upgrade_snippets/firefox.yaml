@@ -69,6 +69,10 @@ version:
 
 # Mozilla repository configuration
 repository:
+  # Host to look for when deciding "is Mozilla's repository already here?".
+  # Detection goes through upgrade_utils.sh::apt_repository_is_configured,
+  # which reads every shape apt does - not just the sources_list below.
+  url: "packages.mozilla.org"
   keyring_dir: "/etc/apt/keyrings"
   signing_key_url: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
   signing_key_path: "/etc/apt/keyrings/packages.mozilla.org.asc"
@@ -87,7 +91,6 @@ repository:
 # Update commands
 update:
   method: "apt"
-  check_mozilla_repo_cmd: "grep -q 'packages.mozilla.org' /etc/apt/sources.list.d/mozilla.list 2>/dev/null"
   update_command: "sudo apt update && sudo apt upgrade -y firefox"
   install_command: "sudo apt install -y firefox"
   remove_command: "sudo apt remove -y firefox"

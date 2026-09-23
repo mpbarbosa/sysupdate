@@ -16,6 +16,23 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$FIREFOX_SCRIPT_DIR/firefox.yaml"
 
+# Fallback host, used when the YAML cannot be read at all. Detection must not
+# silently answer "not configured" just because yq is missing - that answer
+# makes this snippet write a second copy of a repository apt already has.
+FIREFOX_REPO_URL_DEFAULT="packages.mozilla.org"
+
+# True when any enabled apt source already serves Mozilla's packages, in
+# whichever shape. Mozilla ships deb822 `mozilla.sources`, and Ubuntu's deb822
+# migration rewrites an old `mozilla.list` into one, parking the original as
+# `mozilla.list.disabled`. Grepping only the `mozilla.list` this snippet writes
+# reads a configured machine as unconfigured and appends a duplicate entry.
+firefox_repository_is_configured() {
+    local repo_url
+    repo_url=$(get_config "repository.url")
+    [ -n "$repo_url" ] || repo_url="$FIREFOX_REPO_URL_DEFAULT"
+    apt_repository_is_configured "$repo_url"
+}
+
 check_firefox_installed() {
     command -v firefox &> /dev/null
 }
@@ -137,17 +154,42 @@ setup_mozilla_repo() {
     print_status "$keyring_msg"
     sudo install -d -m 0755 "$keyring_dir"
     
-    print_status "$key_msg"
-    local dep_cmd
-    dep_cmd=$(get_config "dependencies[0].command")
-    if ! command -v "$dep_cmd" &> /dev/null; then
-        print_status "wget not found, installing..."
-        sudo apt update && sudo apt install -y wget
+    # Import the signing key only when it is actually missing. Mozilla ships an
+    # ASCII-armoured key, so this writes it verbatim and never reaches gpg's
+    # "File exists. Overwrite? (y/N)" - but piping wget straight into `tee`
+    # truncates a perfectly good key the moment a fetch fails, leaving apt
+    # unable to verify the repository at all. Download to a temp file and only
+    # install it once it is known to be non-empty.
+    if [ -s "$signing_key_path" ]; then
+        print_status "Mozilla signing key already present at $signing_key_path - keeping it"
+    else
+        print_status "$key_msg"
+        local dep_cmd
+        dep_cmd=$(get_config "dependencies[0].command")
+        if ! command -v "$dep_cmd" &> /dev/null; then
+            print_status "wget not found, installing..."
+            sudo apt update && sudo apt install -y wget
+        fi
+        local key_tmp
+        key_tmp=$(mktemp)
+        if ! wget -q "$signing_key_url" -O "$key_tmp" || [ ! -s "$key_tmp" ]; then
+            rm -f "$key_tmp"
+            print_error "Failed to download the Mozilla signing key from $signing_key_url"
+            return 1
+        fi
+        sudo install -m 0644 "$key_tmp" "$signing_key_path"
+        rm -f "$key_tmp"
     fi
-    wget -q "$signing_key_url" -O- | sudo tee "$signing_key_path" > /dev/null
     
-    print_status "$repo_msg"
-    echo "$sources_entry" | sudo tee -a "$sources_list" > /dev/null
+    # Add the source only when nothing already serves it. Appending next to a
+    # live `mozilla.sources` leaves the machine fetching Firefox twice on every
+    # apt update, and `tee -a` stacks another copy of the same line on each run.
+    if firefox_repository_is_configured; then
+        print_status "Mozilla repository already served by an existing apt source - not adding a duplicate"
+    else
+        print_status "$repo_msg"
+        echo "$sources_entry" | sudo tee -a "$sources_list" > /dev/null
+    fi
     
     print_status "$priority_msg"
     echo "$preferences_content" | sudo tee "$preferences_file" > /dev/null
@@ -171,7 +213,10 @@ install_firefox_deb() {
         eval "$snap_remove_cmd"
     fi
     
-    setup_mozilla_repo
+    if ! setup_mozilla_repo; then
+        print_error "Cannot install Firefox from Mozilla's repository"
+        return 1
+    fi
     
     print_status "$updating_msg"
     sudo apt update
@@ -230,9 +275,7 @@ install_or_update_firefox() {
             deb_msg=$(get_config "messages.detected_deb")
             print_status "$deb_msg"
             
-            local check_mozilla_cmd
-            check_mozilla_cmd=$(get_config "update.check_mozilla_repo_cmd")
-            if eval "$check_mozilla_cmd"; then
+            if firefox_repository_is_configured; then
                 local mozilla_msg
                 mozilla_msg=$(get_config "messages.mozilla_configured")
                 print_status "$mozilla_msg"
@@ -243,7 +286,9 @@ install_or_update_firefox() {
                 prompt_msg=$(get_config "prompts.setup_mozilla_repo.message")
                 print_status "$not_configured_msg"
                 if prompt_yes_no "$prompt_msg"; then
-                    setup_mozilla_repo
+                    if ! setup_mozilla_repo; then
+                        return 1
+                    fi
                     update_firefox
                 else
                     print_status "Updating with current repository..."
