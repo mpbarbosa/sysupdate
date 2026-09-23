@@ -58,11 +58,15 @@ messages:
 
 # Version extraction
 version:
-  command: "snap info postman"
-  regex: 'installed:[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*'
-  source: "github"
-  github_owner: "postmanlabs"
-  github_repo: "postman-app-support"
+  # Postman's own "what is latest" endpoint, on the same channel as
+  # update.download_url below, so the version reported is the version an
+  # update installs. When it cannot be read, the snippet falls back to
+  # reading package.json out of the head of the tarball.
+  #
+  # Note: there is no usable GitHub source. postmanlabs/postman-app-support
+  # publishes no releases and its newest tag is v0.9.4.x, years behind the
+  # shipping app.
+  api_url: "https://dl.pstmn.io/api/version/latest"
 
 # Update configuration
 update:

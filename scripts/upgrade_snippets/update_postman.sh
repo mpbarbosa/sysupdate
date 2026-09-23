@@ -340,28 +340,84 @@ get_tarball_version() {
 }
 
 # Get latest version from the downloadable tarball metadata without fetching the full archive.
-get_latest_tarball_version() {
-    local download_url
+# Postman publishes the version of the "latest" download as a few bytes of
+# JSON. Same channel as update.download_url, so what it reports is what an
+# update would actually install.
+POSTMAN_VERSION_API_URL_DEFAULT="https://dl.pstmn.io/api/version/latest"
+
+# Prefixes of the tarball to try when falling back to reading the archive
+# itself, in bytes. The download is ~200 MB and Postman/app/resources/app/
+# package.json sits deep inside it, so a prefix only works once it covers that
+# member — and a single fixed window rots silently as the archive grows. The
+# previous 12 MB window had stopped reaching it (16 MB no longer reaches it
+# either), which is what made every run report "could not determine latest".
+POSTMAN_TARBALL_PROBE_BYTES="${POSTMAN_TARBALL_PROBE_BYTES:-25165824 50331648 100663296}"
+
+# Pull a version out of whatever the version API returned.
+# Treats the response as untrusted: anything that is not a dotted numeric
+# version is no answer at all.
+parse_postman_api_version() {
+    printf '%s' "$1" | sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"([0-9]+(\.[0-9]+)+)".*/\1/p' | head -1
+}
+
+get_latest_version_from_api() {
+    local api_url response version
+
+    api_url=$(get_config "version.api_url")
+    [ -n "$api_url" ] || api_url="$POSTMAN_VERSION_API_URL_DEFAULT"
+
+    response=$(curl -fsS --max-time 15 "$api_url" 2>/dev/null) || return 1
+
+    version=$(parse_postman_api_version "$response")
+    [ -n "$version" ] || return 1
+
+    echo "$version"
+}
+
+# Read the version out of the first $1 bytes of the download.
+get_latest_version_from_tarball_prefix() {
+    local probe_bytes="$1"
+    local download_url temp_tarball latest_version
+
     download_url=$(get_config "update.download_url")
-    local temp_tarball
+    [ -n "$download_url" ] || return 1
+
     temp_tarball=$(mktemp) || return 1
 
-    if ! curl -fsS -r 0-12000000 "$download_url" -o "$temp_tarball"; then
+    if ! curl -fsS -r "0-$probe_bytes" --max-time 300 "$download_url" -o "$temp_tarball"; then
         rm -f "$temp_tarball"
         return 1
     fi
 
-    local latest_version
+    # tar stops with an error on the truncated archive; the member either came
+    # through whole before that point or it did not.
     latest_version=$(tar -xOf "$temp_tarball" Postman/app/resources/app/package.json 2>/dev/null | \
         sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' | head -1)
 
     rm -f "$temp_tarball"
 
-    if [ -z "$latest_version" ]; then
-        return 1
-    fi
-
+    [ -n "$latest_version" ] || return 1
     echo "$latest_version"
+}
+
+get_latest_tarball_version() {
+    local latest_version probe_bytes
+
+    latest_version=$(get_latest_version_from_api) && [ -n "$latest_version" ] && {
+        echo "$latest_version"
+        return 0
+    }
+
+    # The API is one endpoint and one response shape; if either changes, read
+    # the artifact itself rather than reporting an unknown version.
+    for probe_bytes in $POSTMAN_TARBALL_PROBE_BYTES; do
+        latest_version=$(get_latest_version_from_tarball_prefix "$probe_bytes") || continue
+        [ -n "$latest_version" ] || continue
+        echo "$latest_version"
+        return 0
+    done
+
+    return 1
 }
 
 # Detect installation method

@@ -788,3 +788,131 @@ YAML
     [[ "$output" == *"clone it somewhere"* ]]
     [[ "$output" != *"ERROR"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# update_postman: resolving the latest version
+# ---------------------------------------------------------------------------
+
+# Load the snippet's functions without its trailing entry call, keeping its own
+# `../lib` lookup working.
+source_postman_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/pkg/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/pkg/lib"
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_postman.sh" \
+        > "$snippets_dir/update_postman.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_postman.sh"
+    CONFIG_FILE="$REPO_ROOT/scripts/upgrade_snippets/postman.yaml"
+}
+
+# Fake curl: prints $STUB_CURL_BODY for a plain fetch, and for a ranged request
+# (-r) writes STUB_TARBALL_FOR_RANGE's bytes to the -o file, failing when the
+# requested range is below STUB_TARBALL_MIN_RANGE.
+stub_curl() {
+    STUB_BIN="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_BIN"
+    cat > "$STUB_BIN/curl" <<'STUB'
+#!/bin/bash
+range=""
+out=""
+prev=""
+for arg in "$@"; do
+    case "$prev" in
+        -r) range="$arg" ;;
+        -o) out="$arg" ;;
+    esac
+    prev="$arg"
+done
+
+if [ -z "$range" ]; then
+    [ "${STUB_CURL_API_FAILS:-false}" = true ] && exit 22
+    printf '%s' "$STUB_CURL_BODY"
+    exit 0
+fi
+
+requested=${range#0-}
+if [ "$requested" -lt "${STUB_TARBALL_MIN_RANGE:-0}" ]; then
+    : > "$out"
+    exit 0
+fi
+cp "$STUB_TARBALL_FOR_RANGE" "$out"
+STUB
+    chmod +x "$STUB_BIN/curl"
+    PATH="$STUB_BIN:$PATH"
+}
+
+# A real (tiny) tarball holding the member the fallback reads.
+make_postman_tarball() {
+    local version="$1"
+    local root="$BATS_TEST_TMPDIR/tarball/Postman/app/resources/app"
+    mkdir -p "$root"
+    echo "{\"version\": \"$version\"}" > "$root/package.json"
+    tar -czf "$BATS_TEST_TMPDIR/postman.tar.gz" -C "$BATS_TEST_TMPDIR/tarball" Postman
+    echo "$BATS_TEST_TMPDIR/postman.tar.gz"
+}
+
+@test "parse_postman_api_version: reads the version out of the API body" {
+    source_postman_functions
+    run parse_postman_api_version '{"version":"12.29.1"}'
+    [ "$status" -eq 0 ]
+    [ "$output" = "12.29.1" ]
+}
+
+@test "parse_postman_api_version: rejects a body with no usable version" {
+    source_postman_functions
+    run parse_postman_api_version '{"error":"nope"}'
+    [ -z "$output" ]
+}
+
+@test "parse_postman_api_version: rejects a non-numeric version" {
+    source_postman_functions
+    run parse_postman_api_version '{"version":"latest"}'
+    [ -z "$output" ]
+}
+
+@test "get_latest_tarball_version: takes the API answer without downloading" {
+    source_postman_functions
+    stub_curl
+    export STUB_CURL_BODY='{"version":"12.29.1"}'
+    run get_latest_tarball_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "12.29.1" ]
+}
+
+@test "get_latest_tarball_version: falls back to the tarball when the API fails" {
+    source_postman_functions
+    stub_curl
+    export STUB_CURL_API_FAILS=true
+    STUB_TARBALL_FOR_RANGE=$(make_postman_tarball "12.30.0")
+    export STUB_TARBALL_FOR_RANGE STUB_TARBALL_MIN_RANGE=0
+    run get_latest_tarball_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "12.30.0" ]
+}
+
+# The bug: one fixed window that no longer reaches package.json made the whole
+# check report "could not determine latest version".
+@test "get_latest_tarball_version: widens the window until the member is reachable" {
+    source_postman_functions
+    stub_curl
+    export STUB_CURL_API_FAILS=true
+    STUB_TARBALL_FOR_RANGE=$(make_postman_tarball "12.31.0")
+    # Only the second window (50331648) is large enough.
+    export STUB_TARBALL_FOR_RANGE STUB_TARBALL_MIN_RANGE=30000000
+    run get_latest_tarball_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "12.31.0" ]
+}
+
+@test "get_latest_tarball_version: fails when neither source answers" {
+    source_postman_functions
+    stub_curl
+    export STUB_CURL_API_FAILS=true
+    STUB_TARBALL_FOR_RANGE=$(make_postman_tarball "12.32.0")
+    # Larger than every window the snippet tries.
+    export STUB_TARBALL_FOR_RANGE STUB_TARBALL_MIN_RANGE=999999999
+    run get_latest_tarball_version
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
