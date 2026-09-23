@@ -581,3 +581,136 @@ LIST
     run apt_repository_is_configured "packages.mozilla.org"
     [ "$status" -ne 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# source_upgrade_snippets: shell-option isolation
+# ---------------------------------------------------------------------------
+
+# Snippets are sourced into the orchestrator's own shell, so a top-level
+# `set -u` in one of them used to stay on for every snippet after it. A full
+# run died that way inside the sdkman snippet.
+write_snippet() {
+    local name="$1"
+    shift
+    mkdir -p "$BATS_TEST_TMPDIR/snippets"
+    {
+        echo '#!/bin/bash'
+        echo "# SNIPPET_ID: $name"
+        echo "# SNIPPET_NAME: $name"
+        printf '%s\n' "$@"
+    } > "$BATS_TEST_TMPDIR/snippets/update_$name.sh"
+}
+
+@test "source_upgrade_snippets: a snippet's set -u does not leak to the caller" {
+    write_snippet aaa 'set -u'
+    SYSUPDATE_SNIPPETS_DIR="$BATS_TEST_TMPDIR/snippets"
+    set +u
+    source_upgrade_snippets
+    [[ "$-" != *u* ]]
+}
+
+@test "source_upgrade_snippets: a snippet's set -e does not leak to the caller" {
+    write_snippet aaa 'set -e'
+    SYSUPDATE_SNIPPETS_DIR="$BATS_TEST_TMPDIR/snippets"
+    set +e
+    source_upgrade_snippets
+    [[ "$-" != *e* ]]
+}
+
+@test "source_upgrade_snippets: a snippet's set -o pipefail does not leak to the caller" {
+    write_snippet aaa 'set -o pipefail'
+    SYSUPDATE_SNIPPETS_DIR="$BATS_TEST_TMPDIR/snippets"
+    set +o pipefail
+    source_upgrade_snippets
+    [ "$(set -o | awk '$1 == "pipefail" { print $2 }')" = "off" ]
+}
+
+@test "source_upgrade_snippets: nounset the caller already had is kept" {
+    write_snippet aaa 'true'
+    SYSUPDATE_SNIPPETS_DIR="$BATS_TEST_TMPDIR/snippets"
+    set -u
+    source_upgrade_snippets
+    local had_u=0
+    [[ "$-" == *u* ]] || had_u=1
+    set +u
+    [ "$had_u" -eq 0 ]
+}
+
+# The exact sequence that killed the run: an earlier snippet turns nounset on,
+# a later one reads an unset parameter the way SDKMAN's `sdk` function does.
+@test "source_upgrade_snippets: a leaked set -u cannot kill a later snippet" {
+    write_snippet aaa 'set -u'
+    # Shaped like SDKMAN's own `sdk`: reads "$2", called with one argument.
+    write_snippet zzz 'fake_sdk() { local qualifier="$2"; echo "qualifier=[$qualifier]"; }' \
+        'fake_sdk selfupdate' \
+        'echo reached-the-end'
+    SYSUPDATE_SNIPPETS_DIR="$BATS_TEST_TMPDIR/snippets"
+    run bash -c "
+        set +u
+        source '$REPO_ROOT/scripts/lib/upgrade_utils.sh'
+        source '$REPO_ROOT/scripts/lib/app_managers.sh'
+        SYSUPDATE_SNIPPETS_DIR='$BATS_TEST_TMPDIR/snippets'
+        source_upgrade_snippets
+        echo loader-returned
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"reached-the-end"* ]]
+    [[ "$output" == *"loader-returned"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# sdkman_run (scripts/upgrade_snippets/update_sdkman.sh)
+# ---------------------------------------------------------------------------
+
+# The snippet self-executes when sourced, so write a copy without its trailing
+# entry call and hand back the path.
+sdkman_functions_file() {
+    local copy="$BATS_TEST_TMPDIR/sdkman_functions.sh"
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_sdkman.sh" > "$copy"
+    echo "$copy"
+}
+
+# `sdk` stands in for SDKMAN's own function, which opens with an unguarded "$2".
+@test "sdkman_run: survives nounset when sdk reads an unset \$2" {
+    local functions_file
+    functions_file=$(sdkman_functions_file)
+    run bash -c "
+        source '$REPO_ROOT/scripts/lib/upgrade_utils.sh'
+        source '$functions_file'
+        set -u
+        sdk() { local qualifier=\"\$2\"; echo \"ran=\$1 qualifier=[\$qualifier]\"; }
+        sdkman_run selfupdate
+        echo survived
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ran=selfupdate"* ]]
+    [[ "$output" == *"survived"* ]]
+}
+
+@test "sdkman_run: restores nounset after the call" {
+    local functions_file
+    functions_file=$(sdkman_functions_file)
+    run bash -c "
+        source '$REPO_ROOT/scripts/lib/upgrade_utils.sh'
+        source '$functions_file'
+        set -u
+        sdk() { echo sdk-ran; }
+        sdkman_run version
+        case \"\$-\" in *u*) echo nounset-still-on ;; *) echo nounset-lost ;; esac
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sdk-ran"* ]]
+    [[ "$output" == *"nounset-still-on"* ]]
+}
+
+@test "sdkman_run: passes the sdk exit status through" {
+    local functions_file
+    functions_file=$(sdkman_functions_file)
+    run bash -c "
+        source '$REPO_ROOT/scripts/lib/upgrade_utils.sh'
+        source '$functions_file'
+        sdk() { return 3; }
+        sdkman_run selfupdate
+    "
+    [ "$status" -eq 3 ]
+}

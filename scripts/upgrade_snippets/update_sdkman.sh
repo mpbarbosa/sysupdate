@@ -110,10 +110,39 @@ load_sdkman_environment() {
     return 0
 }
 
+# Run an `sdk` command with nounset off.
+#
+# SDKMAN's own `sdk` function opens with `QUALIFIER="$2"`, unguarded, so any
+# call passing fewer than two arguments — `sdk selfupdate`, `sdk version` —
+# reads an unset parameter. Under `set -u` that ends a non-interactive shell on
+# the spot, and because snippets are sourced into the orchestrator's shell the
+# whole run dies with it: that is what stopped a full run dead after "Updating
+# SDKMAN!...". load_sdkman_environment drops nounset while it sources
+# sdkman-init.sh, but the hazard is in calling `sdk`, not in loading it, so
+# every call goes through here instead.
+sdkman_run() {
+    local restore_nounset=false
+    local status
+
+    if [[ $- == *u* ]]; then
+        restore_nounset=true
+        set +u
+    fi
+
+    sdk "$@"
+    status=$?
+
+    if [ "$restore_nounset" = true ]; then
+        set -u
+    fi
+
+    return $status
+}
+
 get_sdkman_current_version() {
     local version_output
     local parsed_version
-    version_output=$(sdk version 2>&1)
+    version_output=$(sdkman_run version 2>&1)
 
     parsed_version=$(printf '%s\n' "$version_output" | sed -nE '
         s/^script:[[:space:]]*([0-9]+(\.[0-9]+)+([+.-][0-9A-Za-z._-]+)?).*/\1/p
@@ -157,7 +186,7 @@ perform_sdkman_update() {
     local latest_version="$2"
     local success_msg="SDKMAN! updated"
 
-    if ! sdk selfupdate; then
+    if ! sdkman_run selfupdate; then
         print_error "Failed to update SDKMAN!"
         return 1
     fi

@@ -27,9 +27,42 @@ source_upgrade_snippets() {
                 _id=$(grep -m1 '^# SNIPPET_ID:' "$_f" 2>/dev/null | sed 's/^# SNIPPET_ID: *//')
                 [ "$_id" = "$SNIPPET_ID_FILTER" ] || continue
             fi
-            source "$_f"
+            source_snippet_isolated "$_f"
         done
     fi
+}
+
+# Source one snippet without letting it change the caller's shell options.
+#
+# Snippets are sourced into the orchestrator's own shell, so a top-level
+# `set -u` or `set -e` in any one of them is not local to it: it stays on for
+# every snippet sourced afterwards and for system_update.sh itself. That is how
+# a full run died inside the sdkman snippet — four earlier snippets had turned
+# nounset on, SDKMAN's own `sdk` function reads an unset "$2", and an unbound
+# variable ends a non-interactive shell outright, taking the rest of the run
+# (and in full mode the dist-upgrade and cleanup) with it.
+#
+# Each snippet still runs under whatever options it sets for itself; the flags
+# are simply put back afterwards. Only the options a snippet can reasonably
+# turn on are restored — errexit, nounset and pipefail.
+source_snippet_isolated() {
+    local snippet_file="$1"
+    local saved_flags="$-"
+    local saved_pipefail
+    saved_pipefail=$(set -o | awk '$1 == "pipefail" { print $2 }')
+
+    source "$snippet_file"
+    local source_status=$?
+
+    case "$saved_flags" in *e*) set -e ;; *) set +e ;; esac
+    case "$saved_flags" in *u*) set -u ;; *) set +u ;; esac
+    if [ "$saved_pipefail" = "on" ]; then
+        set -o pipefail
+    else
+        set +o pipefail
+    fi
+
+    return $source_status
 }
 
 list_upgrade_snippets() {
