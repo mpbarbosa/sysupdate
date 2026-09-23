@@ -16,6 +16,15 @@ A config-driven shell script to update Node.js applications from source code, fo
 - `update_nodejs_app.sh` - Main update script
 - `nodejs_app.yaml` - Configuration template (customize for your app)
 
+## Dormant until you configure it
+
+`nodejs_app.yaml` ships as a template pointing at `/opt/my-nodejs-app`, which
+exists on no machine. While it still holds those placeholder values the snippet
+skips itself with a single status line and a `not_configured` summary event —
+it does not check dependencies, resolve versions, or print install help for an
+app nobody asked sysupdate to manage. Set `application.directory` (and
+`application.name`) to your own app and it starts working on the next run.
+
 ## Prerequisites
 
 - Bash shell

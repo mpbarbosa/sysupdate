@@ -88,6 +88,7 @@ automatically.
 | `ahead_of_latest` | Installed version is newer than latest | Informational |
 | `self_managed` | Tool updates through its own updater; no trackable latest | Informational, never a failure |
 | `not_installed` | Tool is absent | Retryable — a run may offer to install it |
+| `not_configured` | A template snippet nobody has pointed at anything yet (`nodejs-app`) | Informational, never a failure — not something a retry can fix |
 | `unknown` | The check itself failed (network, rate limit, broken binary) | Retryable — usually transient |
 | `invalid_installation` | The install is broken (half-configured dpkg package, checkout that is not a git repo) | **Blocked** — not retryable |
 | `insufficient_efi_space` | Host lacks room to stage the update | **Blocked** — not retryable |

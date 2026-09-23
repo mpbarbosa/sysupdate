@@ -35,8 +35,39 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$SCRIPT_DIR/nodejs_app.yaml"
 
+# Values nodejs_app.yaml ships with. This snippet is a template: unlike every
+# other snippet here it does not describe a tool anyone has installed, it
+# describes an app the operator is expected to point it at. Until they do, the
+# config still names /opt/my-nodejs-app, which exists on no machine.
+NODEJS_APP_TEMPLATE_DIRECTORY="/opt/my-nodejs-app"
+NODEJS_APP_TEMPLATE_NAME="my-nodejs-app"
+
+# True while nodejs_app.yaml is still the shipped example.
+nodejs_app_config_is_template() {
+    local configured_dir configured_name
+    configured_dir=$(get_config "application.directory")
+    configured_name=$(get_config "application.name")
+
+    [ "$configured_dir" = "$NODEJS_APP_TEMPLATE_DIRECTORY" ] ||
+        [ "$configured_name" = "$NODEJS_APP_TEMPLATE_NAME" ]
+}
+
 # Update Node.js application from source
 update_nodejs_app() {
+    local display_name
+    display_name=$(get_config "application.display_name")
+
+    # An unconfigured template has nothing to report. It used to run the whole
+    # workflow anyway and fail at the missing directory, printing a red ERROR
+    # and clone instructions on every single run — for an app the operator
+    # never asked sysupdate to manage.
+    if nodejs_app_config_is_template; then
+        emit_summary_event "version_check" "target" "$display_name" \
+            "status" "not_configured" "current_version" "unknown" "latest_version" "unknown"
+        print_status "Node.js Application snippet is not configured - edit $(basename "$CONFIG_FILE") and set application.directory to your app to enable it"
+        return 0
+    fi
+
     # Check git dependency first
     local git_dep_name
     git_dep_name=$(get_config "dependencies[0].name")
@@ -45,7 +76,7 @@ update_nodejs_app() {
     local git_dep_help
     git_dep_help=$(get_config "dependencies[0].help")
     
-    if ! check_app_installed_or_help "$git_dep_name" "$git_dep_cmd" "$git_dep_help"; then
+    if ! check_app_installed_or_help "$git_dep_cmd" "$git_dep_name" "$git_dep_help"; then
         ask_continue
         return 0
     fi
@@ -58,7 +89,7 @@ update_nodejs_app() {
     local npm_dep_help
     npm_dep_help=$(get_config "dependencies[1].help")
     
-    if ! check_app_installed_or_help "$npm_dep_name" "$npm_dep_cmd" "$npm_dep_help"; then
+    if ! check_app_installed_or_help "$npm_dep_cmd" "$npm_dep_name" "$npm_dep_help"; then
         ask_continue
         return 0
     fi
@@ -67,13 +98,18 @@ update_nodejs_app() {
     local app_dir
     app_dir=$(get_config "application.directory")
     
+    # A configured app that is not on disk is "not installed" — the same thing
+    # every other snippet reports when its tool is absent — not a failure of
+    # the run.
     if [ ! -d "$app_dir" ]; then
-        print_error "Application directory not found: $app_dir"
+        emit_summary_event "version_check" "target" "$display_name" \
+            "status" "not_installed" "current_version" "unknown" "latest_version" "unknown"
+        print_warning "$display_name is not installed at $app_dir"
         local install_help
         install_help=$(get_config "messages.install_help")
         echo "$install_help"
         ask_continue
-        return 1
+        return 0
     fi
     
     # Perform config-driven version check
@@ -85,8 +121,6 @@ update_nodejs_app() {
     # Handle update workflow
     local app_name
     app_name=$(get_config "application.name")
-    local display_name
-    display_name=$(get_config "application.display_name")
     
     # Only proceed if update is available (VERSION_STATUS == 2)
     if [ "$VERSION_STATUS" -eq 2 ]; then

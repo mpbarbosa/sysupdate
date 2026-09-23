@@ -714,3 +714,77 @@ sdkman_functions_file() {
     "
     [ "$status" -eq 3 ]
 }
+
+# ---------------------------------------------------------------------------
+# update_nodejs_app: the shipped template must not shout
+# ---------------------------------------------------------------------------
+
+# The snippet self-executes when sourced, so load a copy without its entry call
+# and point CONFIG_FILE at a config we control.
+# The copy keeps the snippet's own `../lib` lookup working, so it loads exactly
+# as it does in a real run.
+source_nodejs_app_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/pkg/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/pkg/lib"
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_nodejs_app.sh" \
+        > "$snippets_dir/update_nodejs_app.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_nodejs_app.sh"
+}
+
+write_nodejs_app_config() {
+    local directory="$1" name="$2"
+    CONFIG_FILE="$BATS_TEST_TMPDIR/nodejs_app.yaml"
+    cat > "$CONFIG_FILE" <<YAML
+application:
+  name: "$name"
+  display_name: "My Node.js App"
+  directory: "$directory"
+dependencies:
+  - name: "git"
+    command: "git"
+    help: "install git"
+  - name: "npm"
+    command: "npm"
+    help: "install npm"
+messages:
+  install_help: "clone it somewhere"
+YAML
+}
+
+@test "nodejs_app_config_is_template: true for the shipped placeholders" {
+    source_nodejs_app_functions
+    write_nodejs_app_config "/opt/my-nodejs-app" "my-nodejs-app"
+    run nodejs_app_config_is_template
+    [ "$status" -eq 0 ]
+}
+
+@test "nodejs_app_config_is_template: false once pointed at a real app" {
+    source_nodejs_app_functions
+    write_nodejs_app_config "$BATS_TEST_TMPDIR/some-app" "some-app"
+    run nodejs_app_config_is_template
+    [ "$status" -ne 0 ]
+}
+
+@test "update_nodejs_app: unconfigured template skips without an error" {
+    source_nodejs_app_functions
+    write_nodejs_app_config "/opt/my-nodejs-app" "my-nodejs-app"
+    run update_nodejs_app
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not configured"* ]]
+    [[ "$output" != *"ERROR"* ]]
+    [[ "$output" != *"Application directory not found"* ]]
+    # No clone instructions for an app nobody asked sysupdate to manage.
+    [[ "$output" != *"clone it somewhere"* ]]
+}
+
+@test "update_nodejs_app: a configured but absent app reports not installed, not failure" {
+    source_nodejs_app_functions
+    write_nodejs_app_config "$BATS_TEST_TMPDIR/absent-app" "absent-app"
+    run update_nodejs_app
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is not installed at"* ]]
+    [[ "$output" == *"clone it somewhere"* ]]
+    [[ "$output" != *"ERROR"* ]]
+}
