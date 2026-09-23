@@ -8,6 +8,11 @@ interface DashboardViewProps {
   onUpgrade: (id: string) => void;
   autoUpdateIds: Set<string>;
   onToggleAutoUpdate: (id: string) => void;
+  /** When true, items already at their latest version are left out of `items`. */
+  hideUpToDate: boolean;
+  /** How many up-to-date items the toggle is hiding in the active category. */
+  hiddenUpToDateCount: number;
+  onToggleHideUpToDate: () => void;
   terminalLines: TerminalLine[];
   isProcessing: boolean;
   pendingTotal: number;
@@ -116,12 +121,16 @@ export default function DashboardView({
   onUpgrade,
   autoUpdateIds,
   onToggleAutoUpdate,
+  hideUpToDate,
+  hiddenUpToDateCount,
+  onToggleHideUpToDate,
   terminalLines,
   isProcessing,
   pendingTotal,
   themeColor,
 }: DashboardViewProps) {
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const filterColor = getActionToneColor(hideUpToDate ? 'accent' : 'muted', themeColor);
 
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -130,12 +139,29 @@ export default function DashboardView({
   return (
     <div className="flex h-full min-h-0 flex-1 gap-4 p-4">
       <section className="flex w-[400px] shrink-0 flex-col">
-        <h2 className="mb-2 font-mono text-xs font-bold uppercase tracking-widest text-slate-400">
-          Available Updates
-        </h2>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="font-mono text-xs font-bold uppercase tracking-widest text-slate-400">
+            Available Updates
+          </h2>
+          <button
+            type="button"
+            onClick={onToggleHideUpToDate}
+            aria-pressed={hideUpToDate}
+            title={hideUpToDate ? 'Show items that are already up to date' : 'Hide items that are already up to date'}
+            className="flex shrink-0 items-center gap-1.5 rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors"
+            style={{ borderColor: filterColor, color: filterColor }}
+          >
+            <span aria-hidden="true">{hideUpToDate ? '◉' : '○'}</span>
+            <span>Hide up to date</span>
+          </button>
+        </div>
         <div className="hud-scroll flex flex-1 flex-col gap-2 overflow-y-auto pr-1">
           {items.length === 0 ? (
-            <p className="font-mono text-xs text-slate-500">No items in this category.</p>
+            <p className="font-mono text-xs text-slate-500">
+              {hiddenUpToDateCount > 0
+                ? `All ${hiddenUpToDateCount} item${hiddenUpToDateCount === 1 ? '' : 's'} in this category are up to date.`
+                : 'No items in this category.'}
+            </p>
           ) : (
             items.map((item) => (
               <UpdateItemCard
@@ -147,6 +173,11 @@ export default function DashboardView({
                 themeColor={themeColor}
               />
             ))
+          )}
+          {items.length > 0 && hiddenUpToDateCount > 0 && (
+            <p className="mt-1 font-mono text-[11px] text-slate-600">
+              {hiddenUpToDateCount} up-to-date item{hiddenUpToDateCount === 1 ? '' : 's'} hidden
+            </p>
           )}
         </div>
       </section>

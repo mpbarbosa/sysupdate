@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopAppBar from './components/TopAppBar';
 import DashboardView from './components/DashboardView';
+import { countHiddenUpToDate, filterUpdateItems } from './updateFilter';
 import LogsView from './components/LogsView';
 import ScheduleView from './components/ScheduleView';
 import SettingsView from './components/SettingsView';
@@ -202,6 +203,26 @@ const saveAutoUpdateIds = (ids: Set<string>): void => {
   }
 };
 
+const HIDE_UP_TO_DATE_STORAGE_KEY = 'sysupdate.hideUpToDate';
+
+// "Hide up to date" toggle on the Available Updates list. Client-side only;
+// anything other than the literal string 'true' means the toggle is off.
+const loadHideUpToDate = (): boolean => {
+  try {
+    return localStorage.getItem(HIDE_UP_TO_DATE_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const saveHideUpToDate = (hide: boolean): void => {
+  try {
+    localStorage.setItem(HIDE_UP_TO_DATE_STORAGE_KEY, String(hide));
+  } catch {
+    // Storage unavailable — preference stays in-memory only.
+  }
+};
+
 const isCheckOnlyRun = (args: string[]): boolean => args.includes('--check-only');
 
 const getRunSnippetId = (args: string[]): string | null => {
@@ -238,6 +259,15 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentRun, setCurrentRun] = useState<BackendRunSnapshot | null>(null);
   const [autoUpdateIds, setAutoUpdateIds] = useState<Set<string>>(loadAutoUpdateIds);
+  const [hideUpToDate, setHideUpToDate] = useState<boolean>(loadHideUpToDate);
+
+  const handleToggleHideUpToDate = useCallback(() => {
+    setHideUpToDate((previous) => {
+      const next = !previous;
+      saveHideUpToDate(next);
+      return next;
+    });
+  }, []);
 
   const handleToggleAutoUpdate = useCallback((id: string) => {
     setAutoUpdateIds((previous) => {
@@ -844,8 +874,13 @@ function App() {
   };
 
   const filteredItems = useMemo(
-    () => (activeCategory === 'all' ? updateItems : updateItems.filter((item) => item.category === activeCategory)),
-    [updateItems, activeCategory],
+    () => filterUpdateItems(updateItems, { category: activeCategory, hideUpToDate }),
+    [updateItems, activeCategory, hideUpToDate],
+  );
+
+  const hiddenUpToDateCount = useMemo(
+    () => countHiddenUpToDate(updateItems, { category: activeCategory, hideUpToDate }),
+    [updateItems, activeCategory, hideUpToDate],
   );
 
   const pendingTotal = useMemo(
@@ -890,6 +925,9 @@ function App() {
             onUpgrade={handleUpgrade}
             autoUpdateIds={autoUpdateIds}
             onToggleAutoUpdate={handleToggleAutoUpdate}
+            hideUpToDate={hideUpToDate}
+            hiddenUpToDateCount={hiddenUpToDateCount}
+            onToggleHideUpToDate={handleToggleHideUpToDate}
             terminalLines={terminalLines}
             isProcessing={isProcessing}
             pendingTotal={pendingTotal}

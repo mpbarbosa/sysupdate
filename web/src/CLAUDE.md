@@ -8,6 +8,7 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 | `types.ts` | All shared interfaces (`UpdateItem`, `BackendRunSnapshot`, `SystemConfig`, …) |
 | `summaryStatus.ts` | Pure CLI-status → card status/severity mapping (+ `summaryStatus.test.ts`) |
 | `updateCard.ts` | Pure card affordances — which button, versions vs remediation (+ `updateCard.test.ts`) |
+| `updateFilter.ts` | Pure list filtering — sidebar category + "hide up to date" toggle (+ `updateFilter.test.ts`) |
 | `theme.ts` | Pure theme helpers — no component logic, no React imports |
 | `theme.test.ts` | Vitest unit tests for theme helpers |
 | `components/` | Subcomponents rendered by `App.tsx` |
