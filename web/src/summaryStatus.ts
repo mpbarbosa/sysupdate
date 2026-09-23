@@ -1,6 +1,6 @@
 // Pure mappings from the CLI's `summary.updates` status onto the dashboard's
-// UpdateItem status + severity. No React, no side effects — unit-tested in
-// summaryStatus.test.ts.
+// UpdateItem status + severity + version labels. No React, no side effects —
+// unit-tested in summaryStatus.test.ts.
 import type { UpdateItem } from './types';
 
 // Map a raw CLI summary status to the card's lifecycle status.
@@ -50,4 +50,39 @@ export function toSeverity(status: unknown, totalUpdates?: number): UpdateItem['
 
   // Everything else — up_to_date, self_managed, unrecognized — is informational.
   return 'info';
+}
+
+/**
+ * A package-manager summary reports an inventory (`total_updates`), not a
+ * version pair, so the card's `current → latest` line is synthesized here.
+ *
+ * Only statuses that actually produced an inventory may claim one. `unknown`
+ * means the check itself failed — a network miss, a rate limit, a manager that
+ * would not answer — and it is the one status whose labels the card really
+ * renders (`up_to_date` and blocked cards hide the latest half), so claiming
+ * "up to date" there put a green all-clear next to a red Retry button.
+ */
+export function toManagerVersionLabels(
+  status: unknown,
+  totalUpdates = 0,
+): Pick<UpdateItem, 'currentVersion' | 'latestVersion'> {
+  if (status === 'update_available') {
+    return {
+      currentVersion: 'pending updates',
+      latestVersion: `${totalUpdates} update${totalUpdates === 1 ? '' : 's'}`,
+    };
+  }
+
+  if (status === 'up_to_date') {
+    return { currentVersion: 'checked', latestVersion: 'up to date' };
+  }
+
+  // The check ran and reported a host state we cannot act on (pip's
+  // externally-managed environment, a full ESP). The card shows the
+  // remediation instead of these, but they must still not read as an all-clear.
+  if (toUpdateStatus(status) === 'blocked') {
+    return { currentVersion: 'checked', latestVersion: 'blocked' };
+  }
+
+  return { currentVersion: 'unknown', latestVersion: 'check failed' };
 }

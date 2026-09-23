@@ -23,7 +23,7 @@ import type {
   ViewName,
 } from './types';
 import { getFontSizeClass } from './theme';
-import { toUpdateStatus, toSeverity } from './summaryStatus';
+import { toUpdateStatus, toSeverity, toManagerVersionLabels } from './summaryStatus';
 
 const nowTimestamp = (): string => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const INITIAL_TERMINAL_LINE: TerminalLine = {
@@ -385,16 +385,10 @@ function App() {
           ? summary.total_updates
           : Number.parseInt(String(summary.total_updates ?? '0'), 10);
       const totalUpdates = Number.isFinite(parsedTotal) ? parsedTotal : 0;
-      const currentVersion = summary.status === 'update_available' ? 'pending updates' : 'checked';
-      const latestVersion =
-        summary.status === 'update_available'
-          ? `${totalUpdates} update${totalUpdates === 1 ? '' : 's'}`
-          : 'up to date';
 
       nextItems.push({
         ...managerConfig,
-        currentVersion,
-        latestVersion,
+        ...toManagerVersionLabels(summary.status, totalUpdates),
         status: toUpdateStatus(summary.status),
         severity: toSeverity(summary.status, totalUpdates),
         changelog: [],
