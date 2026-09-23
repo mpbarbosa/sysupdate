@@ -34,6 +34,7 @@ const snippetIdByModule = new Map();
 
 let activeChild = null;
 let currentRun = null;
+let shuttingDown = false;
 
 function setCorsHeaders(response) {
   response.setHeader('Access-Control-Allow-Origin', `http://${HOST}:5173`);
@@ -486,7 +487,7 @@ const server = createServer(async (request, response) => {
           host: HOST,
           port: PORT,
           websocketPath: '/ws',
-          supports: ['logs', 'check-only-run', 'snippet-upgrade-run', 'json-events', 'run-history'],
+          supports: ['logs', 'check-only-run', 'snippet-upgrade-run', 'json-events', 'run-history', 'shutdown'],
         },
         logs,
         run: getRunSnapshot(),
@@ -529,6 +530,30 @@ const server = createServer(async (request, response) => {
       }
 
       sendJson(response, result.statusCode, { run: result.payload });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/shutdown') {
+      const body = await readRequestJson(request);
+      const runActive =
+        activeChild !== null && currentRun !== null && (currentRun.status === 'starting' || currentRun.status === 'running');
+
+      // Stopping the bridge mid-run kills the child CLI, which can leave a
+      // package manager half-way through an install. Callers must opt in.
+      if (runActive && body.force !== true) {
+        sendJson(response, 409, {
+          error: 'A sysupdate run is in progress. Send { "force": true } to stop it and shut down anyway.',
+        });
+        return;
+      }
+
+      broadcast({
+        type: 'bridge.shutdown',
+        payload: { reason: 'requested', runStopped: runActive },
+      });
+      sendJson(response, 202, { shuttingDown: true, runStopped: runActive });
+      // Let the response reach the socket before the listener goes away.
+      setTimeout(shutdown, 100);
       return;
     }
 
@@ -591,17 +616,38 @@ server.listen(PORT, HOST, () => {
   console.log(`sysupdate local backend bridge listening on http://${HOST}:${PORT}`);
 });
 
-function shutdown() {
+function shutdown(reason = 'requested') {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  console.log(`sysupdate backend: shutting down (${reason})`);
+
   if (activeChild?.pid) {
     activeChild.kill('SIGTERM');
   }
 
+  for (const client of clients) {
+    try {
+      client.close(1001, 'Backend shutting down');
+    } catch {
+      clients.delete(client);
+    }
+  }
+
+  // Idle keep-alive connections (the Vite proxy, a browser) would otherwise
+  // hold server.close() open indefinitely; cap the wait.
+  const forceExit = setTimeout(() => process.exit(0), 2000);
+  forceExit.unref();
+
   websocketServer.close(() => {
+    server.closeAllConnections?.();
     server.close(() => {
       process.exit(0);
     });
   });
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGHUP', () => shutdown('SIGHUP'));

@@ -18,15 +18,21 @@ logger.error = (msg, options) => {
   baseError(msg, options)
 }
 
+// Backend bridge address — same variables backend/server.js and run_app.sh read,
+// so an alternative port set for one process is picked up by all three.
+const backendHost = process.env.SYSUPDATE_WEB_HOST ?? '127.0.0.1'
+const backendPort = process.env.SYSUPDATE_WEB_PORT ?? '4174'
+const backendOrigin = `${backendHost}:${backendPort}`
+
 // https://vite.dev/config/
 export default defineConfig({
   customLogger: logger,
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:4174',
+      '/api': `http://${backendOrigin}`,
       '/ws': {
-        target: 'ws://127.0.0.1:4174',
+        target: `ws://${backendOrigin}`,
         ws: true,
         rewriteWsOrigin: true,
       },

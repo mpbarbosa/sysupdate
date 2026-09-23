@@ -216,3 +216,68 @@ describe('POST /api/runs/check-only — stub run', { concurrency: false }, () =>
     await new Promise((r) => setTimeout(r, 800));
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/shutdown — must stay LAST: a successful call exits the server.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/shutdown', { concurrency: false }, () => {
+  it('refuses to stop the bridge mid-run without force → 409', async () => {
+    const start = await fetch(`${BASE}/api/runs/check-only`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snippetId: 'slow' }),
+    });
+    assert.strictEqual(start.status, 202);
+
+    const res = await fetch(`${BASE}/api/shutdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.strictEqual(res.status, 409);
+    const body = await res.json();
+    assert.match(body.error, /in progress/);
+
+    // Still alive.
+    const health = await fetch(`${BASE}/api/health`);
+    assert.strictEqual(health.status, 200);
+  });
+
+  it('with force: tells clients, answers 202, stops the run and exits 0', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+    const messages = [];
+    const wsClosed = new Promise((resolve) => ws.addEventListener('close', resolve));
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve);
+      ws.addEventListener('error', reject);
+    });
+    ws.addEventListener('message', (e) => messages.push(JSON.parse(e.data)));
+
+    const exited = new Promise((resolve) => serverProcess.once('exit', resolve));
+
+    const res = await fetch(`${BASE}/api/shutdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+    assert.strictEqual(res.status, 202);
+    const body = await res.json();
+    assert.strictEqual(body.shuttingDown, true);
+    assert.strictEqual(body.runStopped, true);
+
+    const exitCode = await Promise.race([
+      exited,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('server did not exit within 4s')), 4000)),
+    ]);
+    assert.strictEqual(exitCode, 0);
+
+    await wsClosed;
+    assert.ok(
+      messages.some((m) => m.type === 'bridge.shutdown'),
+      `expected a bridge.shutdown message, got: ${messages.map((m) => m.type).join(', ')}`,
+    );
+
+    await assert.rejects(fetch(`${BASE}/api/health`), 'backend should no longer be listening');
+  });
+});

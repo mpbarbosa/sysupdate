@@ -22,8 +22,9 @@ Usage: $SCRIPT_NAME [OPTIONS]
 
 Build the sysupdate web dashboard, start the Node.js backend bridge and the
 Vite dev server, wait for the app to become ready, then open it in a browser.
-Runs in the foreground until the dev server exits or you press Ctrl+C, which
-shuts down both child processes.
+Runs in the foreground until the dev server exits, the backend is stopped (for
+example with the dashboard's shut-down button), or you press Ctrl+C — each of
+which shuts down both child processes.
 
 Options:
     -i, --interactive   Authenticate sudo up front and keep the credentials
@@ -71,15 +72,30 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# `npm run <x>` forks `sh -c` which forks node/vite; a plain `kill` reaches only
+# the npm wrapper and orphans the server. Each service therefore starts in its
+# own process group (setsid, where available) and is stopped as a group.
+start_service() {
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$@" &
+    else
+        "$@" &
+    fi
+}
+
+stop_service() {
+    local pid="$1"
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
     if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-        kill "$BACKEND_PID"
-        wait "$BACKEND_PID" 2>/dev/null || true
+        stop_service "$BACKEND_PID"
     fi
 
     if [ -n "$DEV_PID" ] && kill -0 "$DEV_PID" 2>/dev/null; then
-        kill "$DEV_PID"
-        wait "$DEV_PID" 2>/dev/null || true
+        stop_service "$DEV_PID"
     fi
 
     if [ -n "$SUDO_KEEPALIVE_PID" ] && kill -0 "$SUDO_KEEPALIVE_PID" 2>/dev/null; then
@@ -206,7 +222,7 @@ if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
             port_in_use "$BACKEND_PORT" "$BACKEND_HOST" || break
             sleep 1
         done
-        npm run backend &
+        start_service npm run backend
         BACKEND_PID=$!
         ensure_process_running "$BACKEND_PID" "Backend service"
     else
@@ -214,7 +230,7 @@ if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
         # Leave BACKEND_PID empty so cleanup() won't kill a backend this script didn't start.
     fi
 else
-    npm run backend &
+    start_service npm run backend
     BACKEND_PID=$!
     ensure_process_running "$BACKEND_PID" "Backend service"
 fi
@@ -224,7 +240,7 @@ if port_in_use "$APP_PORT" "$APP_HOST"; then
     echo "A dev server is already listening on ${APP_HOST}:${APP_PORT} — reusing it (not starting a second one)."
     # Leave DEV_PID empty so cleanup() won't kill a dev server this script didn't start.
 else
-    npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort &
+    start_service npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort
     DEV_PID=$!
     ensure_process_running "$DEV_PID" "Vite dev server"
 fi
@@ -237,9 +253,23 @@ else
     echo "Web app did not become ready in time. Open it manually at: $APP_URL"
 fi
 
-# Foreground on the dev server if this script started it. If it (and the backend)
-# were already running, there's nothing of ours to wait on — the servers keep
-# running independently and the script exits after opening the browser.
+# Foreground while the dev server this script started is alive. Also leave when
+# the backend goes away — the dashboard's shut-down button stops the backend
+# only, and leaving the dev server orphaned would keep serving a dead app. The
+# EXIT trap then kills whatever this script started. If the dev server was
+# already running, there's nothing of ours to wait on — the servers keep running
+# independently and the script exits after opening the browser.
+wait_for_shutdown() {
+    while kill -0 "$DEV_PID" 2>/dev/null; do
+        if [ -n "$BACKEND_PID" ]; then
+            kill -0 "$BACKEND_PID" 2>/dev/null || { echo "Backend stopped; shutting down the dev server."; return; }
+        else
+            port_in_use "$BACKEND_PORT" "$BACKEND_HOST" || { echo "Backend stopped; shutting down the dev server."; return; }
+        fi
+        sleep 1
+    done
+}
+
 if [ -n "$DEV_PID" ]; then
-    wait "$DEV_PID"
+    wait_for_shutdown
 fi

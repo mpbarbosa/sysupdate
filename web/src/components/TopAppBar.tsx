@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import type { SystemConfig, ViewName } from '../types';
-import { getThemeColorHex } from '../theme';
+import { getActionToneColor, getThemeColorHex } from '../theme';
 
 const VIEWS: { id: ViewName; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -13,6 +14,8 @@ interface TopAppBarProps {
   onViewChange: (view: ViewName) => void;
   onRefresh: () => void;
   onRunAll: () => void;
+  /** Stop the backend bridge and try to close this tab. Already confirmed by the user. */
+  onShutdown: () => void;
   isProcessing: boolean;
   progress: number;
   pendingTotal: number;
@@ -25,6 +28,7 @@ export default function TopAppBar({
   onViewChange,
   onRefresh,
   onRunAll,
+  onShutdown,
   isProcessing,
   progress,
   pendingTotal,
@@ -32,6 +36,11 @@ export default function TopAppBar({
   glowEffects,
 }: TopAppBarProps) {
   const accent = getThemeColorHex(themeColor);
+  const dangerColor = getActionToneColor('danger', themeColor);
+  const mutedColor = getActionToneColor('muted', themeColor);
+  // Shutdown is not undoable from the page, so it needs a second click. The
+  // browser's confirm() would do, but an inline prompt keeps the HUD look.
+  const [confirmingShutdown, setConfirmingShutdown] = useState(false);
 
   return (
     <header className="border-b border-hud-border bg-hud-panel/60">
@@ -99,6 +108,56 @@ export default function TopAppBar({
           >
             Run All
           </button>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setConfirmingShutdown((previous) => !previous)}
+              aria-expanded={confirmingShutdown}
+              className="rounded border border-hud-border px-2.5 py-1.5 text-sm text-slate-300 hover:border-slate-500"
+              style={confirmingShutdown ? { borderColor: dangerColor, color: dangerColor } : undefined}
+              aria-label="Shut down backend and close tab"
+              title="Shut down backend and close tab"
+            >
+              ⏻
+            </button>
+
+            {confirmingShutdown && (
+              <div
+                role="alertdialog"
+                aria-label="Confirm shutdown"
+                className="absolute right-0 top-full z-20 mt-2 w-64 rounded border bg-hud-panel p-3 font-mono text-[11px] shadow-lg"
+                style={{ borderColor: dangerColor }}
+              >
+                <p className="uppercase tracking-wider text-slate-300">
+                  {isProcessing
+                    ? 'Stop the running update and the backend, then close this tab?'
+                    : 'Stop the backend and close this tab?'}
+                </p>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingShutdown(false)}
+                    className="rounded border px-2 py-0.5 uppercase tracking-widest"
+                    style={{ borderColor: mutedColor, color: mutedColor }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmingShutdown(false);
+                      onShutdown();
+                    }}
+                    className="rounded border px-2 py-0.5 font-bold uppercase tracking-widest"
+                    style={{ borderColor: dangerColor, color: dangerColor }}
+                  >
+                    Shut down
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

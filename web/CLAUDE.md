@@ -35,7 +35,7 @@ No automated test suite exists. Validation is `tsc --noEmit`, `eslint .`, and ma
 
 ### Two-process model
 
-The backend bridge (`backend/server.js`) and the Vite dev server are independent processes. Vite's `vite.config.ts` proxies `/api` and `/ws` to `localhost:4174`, so the frontend always talks to a single origin.
+The backend bridge (`backend/server.js`) and the Vite dev server are independent processes. Vite's `vite.config.ts` proxies `/api` and `/ws` to the bridge (`SYSUPDATE_WEB_HOST`/`SYSUPDATE_WEB_PORT`, default `127.0.0.1:4174`), so the frontend always talks to a single origin and an alternative port set for one process is picked up by all three.
 
 ### Backend bridge (`backend/server.js`)
 
@@ -53,6 +53,8 @@ Key env vars for the backend:
 - `SYSUPDATE_LOG_LIMIT` — max log entries returned (default 50)
 
 REST endpoints: `GET /api/health`, `GET /api/bootstrap`, `GET /api/logs`, `GET /api/runs/current`, `POST /api/runs/check-only`, `POST /api/runs/upgrade`.
+
+`POST /api/shutdown` stops the bridge process: it broadcasts a `bridge.shutdown` WebSocket message, answers `202 { shuttingDown: true }`, then closes the servers and exits 0. While a run is active it answers `409` unless the body carries `{ "force": true }`, which also SIGTERMs the child CLI. The top bar's power button uses it (after an inline confirmation), then calls `window.close()`; browsers only honour that for script-opened or single-history tabs, so `ShutdownScreen` is rendered as the fallback. `run_app.sh` watches the backend and stops the Vite dev server when it exits — a dev server started by hand stays up.
 
 ### Frontend (`src/`)
 

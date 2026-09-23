@@ -18,6 +18,7 @@ Two files implement the Node.js bridge between the CLI and the web dashboard:
 - `SYSUPDATE_SCRIPT_PATH` env var overrides the CLI path for test isolation
 - `SYSUPDATE_WEB_HOST` / `SYSUPDATE_WEB_PORT` control the server bind address (default `127.0.0.1:4174`)
 - `SYSUPDATE_LOG_FILE` / `SYSUPDATE_LOG_LIMIT` control log history
+- `POST /api/shutdown` is the only route that ends the process: 409 while a run is active unless `{ force: true }`; it broadcasts `bridge.shutdown` before `shutdown()` runs, and `shutdown()` is idempotent with a 2s hard-exit cap for idle keep-alive connections
 
 ## Run backend tests
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopAppBar from './components/TopAppBar';
 import DashboardView from './components/DashboardView';
+import ShutdownScreen from './components/ShutdownScreen';
 import { countHiddenUpToDate, filterUpdateItems } from './updateFilter';
 import LogsView from './components/LogsView';
 import ScheduleView from './components/ScheduleView';
@@ -260,6 +261,9 @@ function App() {
   const [currentRun, setCurrentRun] = useState<BackendRunSnapshot | null>(null);
   const [autoUpdateIds, setAutoUpdateIds] = useState<Set<string>>(loadAutoUpdateIds);
   const [hideUpToDate, setHideUpToDate] = useState<boolean>(loadHideUpToDate);
+  // 'requested' = this tab asked the bridge to stop; 'notified' = another
+  // client did and the bridge told us over the WebSocket.
+  const [shutdownState, setShutdownState] = useState<'none' | 'requested' | 'notified'>('none');
 
   const handleToggleHideUpToDate = useCallback(() => {
     setHideUpToDate((previous) => {
@@ -708,6 +712,11 @@ function App() {
           if (payload.payload.event_type === 'log.entry') {
             mergeLogs([payload.payload]);
           }
+          return;
+        }
+
+        if (payload.type === 'bridge.shutdown') {
+          setShutdownState((previous) => (previous === 'none' ? 'notified' : previous));
         }
       } catch {
         // Ignore malformed websocket messages from the local bridge.
@@ -796,6 +805,37 @@ function App() {
       ]);
       setIsProcessing(false);
     });
+  };
+
+  const handleShutdown = () => {
+    if (shutdownState !== 'none') return;
+    setTerminalLines((previous) => [
+      ...previous,
+      { id: `backend-shutdown-${Date.now()}`, text: 'Stopping the backend bridge...', type: 'dim' },
+    ]);
+    // The user confirmed in the top bar, so an in-flight run is stopped too.
+    void fetch('/api/shutdown', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Backend shutdown failed with HTTP ${response.status}.`);
+        }
+        websocketRef.current?.close();
+        setShutdownState('requested');
+        // Only tabs opened by a script (or holding a single history entry) may
+        // close themselves; ShutdownScreen covers the case where this is ignored.
+        window.close();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Unknown backend error.';
+        setTerminalLines((previous) => [
+          ...previous,
+          { id: `backend-shutdown-error-${Date.now()}`, text: `Unable to stop the backend: ${message}`, type: 'error' },
+        ]);
+      });
   };
 
   const handleRunAll = () => {
@@ -894,6 +934,10 @@ function App() {
     return Math.round((settled / updateItems.length) * 100);
   }, [updateItems]);
 
+  if (shutdownState !== 'none') {
+    return <ShutdownScreen closeAttempted={shutdownState === 'requested'} themeColor={config.themeColor} />;
+  }
+
   return (
     <div className={`flex h-screen flex-col overflow-hidden ${getFontSizeClass(config.fontSize)}`}>
       <TopAppBar
@@ -901,6 +945,7 @@ function App() {
         onViewChange={setActiveView}
         onRefresh={handleRefresh}
         onRunAll={handleRunAll}
+        onShutdown={handleShutdown}
         isProcessing={isProcessing}
         progress={progress}
         pendingTotal={pendingTotal}

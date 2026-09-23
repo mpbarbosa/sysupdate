@@ -27,6 +27,7 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 - Mock data lives in `data/mockData.ts`, never inline in component bodies
 - `ScheduleTask.command` is intended for `sysupdate --snippet <id>` but crontab wiring is not yet implemented
 - `handleRunAll` in `App.tsx` is a stub — only individual snippet upgrades are wired to the live backend
+- `shutdownState` in `App.tsx` swaps the whole tree for `components/ShutdownScreen.tsx` once the bridge confirms it is stopping (`POST /api/shutdown` from this tab, or a `bridge.shutdown` WebSocket message from another); `window.close()` is only attempted by the tab that asked
 
 ## Run frontend type-check and lint
 
