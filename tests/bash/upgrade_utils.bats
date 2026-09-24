@@ -916,3 +916,48 @@ make_postman_tarball() {
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+# ---------------------------------------------------------------------------
+# vscode-insiders: post-install verification reads the dpkg version
+# ---------------------------------------------------------------------------
+#
+# The deb installer always ends with verify_configured_update_result, which
+# needs version.command/regex in the snippet's YAML. vscode_insiders.yaml had
+# neither, so a successful install was reported as "Failed to verify active
+# version". These tests run the REAL yaml against a stubbed dpkg-query.
+
+stub_vscode_dpkg_version() {
+    local stubdir="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$stubdir"
+    printf '#!/bin/sh\nprintf "%%s" "$STUB_DPKG_VERSION"\n' > "$stubdir/dpkg-query"
+    chmod +x "$stubdir/dpkg-query"
+    export PATH="$stubdir:$PATH"
+    export CONFIG_FILE="$REPO_ROOT/scripts/upgrade_snippets/vscode_insiders.yaml"
+    export APP_DISPLAY_NAME="VSCode Insiders"
+}
+
+@test "vscode-insiders: get_current_version_from_config returns the full dpkg version" {
+    stub_vscode_dpkg_version
+    export STUB_DPKG_VERSION="1.140.0-1790270607"
+    run get_current_version_from_config
+    [ "$status" -eq 0 ]
+    # Not "0-1790270607": an unanchored regex lets extract_version's leading .* eat "1."
+    [ "$output" = "1.140.0-1790270607" ]
+}
+
+@test "vscode-insiders: verification passes once the installed build reaches the latest" {
+    stub_vscode_dpkg_version
+    export STUB_DPKG_VERSION="1.140.0-1790270607"
+    run verify_configured_update_result "1.140.0-1790227310" "1.140.0-1790270607" "update completed"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Verified version: 1.140.0-1790270607"* ]]
+    [[ "$output" != *"Failed to verify"* ]]
+}
+
+@test "vscode-insiders: verification fails when the installed build is still behind" {
+    stub_vscode_dpkg_version
+    export STUB_DPKG_VERSION="1.140.0-1790227310"
+    run verify_configured_update_result "1.140.0-1790227310" "1.140.0-1790270607" "update completed"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"did not reach the expected version"* ]]
+}
