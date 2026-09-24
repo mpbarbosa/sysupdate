@@ -48,6 +48,13 @@ version:
   # We need custom logic to fetch from download redirect
   custom_fetch_url: "https://code.visualstudio.com/sha/download?build=insider&os=linux-deb-x64"
   version_regex: 'code-insiders_([0-9.]+-[0-9]+)_.*'
+  # Post-install verification (verify_configured_update_result) reads the active
+  # version via version.command/regex. `code-insiders --version` prints only
+  # "1.140.0-insider", which can never match the "1.140.0-<build>" latest_version,
+  # so read the dpkg version instead. The regex is anchored: extract_version's
+  # leading `.*` would otherwise eat the "1." of "1.140.0-...".
+  command: 'dpkg-query -W -f=''${Version}'' code-insiders'
+  regex: '^([0-9.]+-[0-9]+)'
   # For comparison, strip the last part after hyphen
   comparison_strip_suffix: true
 
