@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import TopAppBar from './components/TopAppBar';
 import DashboardView from './components/DashboardView';
 import ShutdownScreen from './components/ShutdownScreen';
+import SudoPasswordModal from './components/SudoPasswordModal';
 import { countHiddenUpToDate, filterUpdateItems } from './updateFilter';
 import LogsView from './components/LogsView';
 import ScheduleView from './components/ScheduleView';
@@ -264,6 +265,13 @@ function App() {
   // 'requested' = this tab asked the bridge to stop; 'notified' = another
   // client did and the bridge told us over the WebSocket.
   const [shutdownState, setShutdownState] = useState<'none' | 'requested' | 'notified'>('none');
+  // Delivery state of the answer to the bridge's current sudo prompt; keyed by
+  // requestId so a new prompt (after a rejection) starts clean.
+  const [sudoAnswer, setSudoAnswer] = useState<{ requestId: string | null; submitting: boolean; error: string | null }>({
+    requestId: null,
+    submitting: false,
+    error: null,
+  });
 
   const handleToggleHideUpToDate = useCallback(() => {
     setHideUpToDate((previous) => {
@@ -801,6 +809,44 @@ function App() {
     });
   };
 
+  // The bridge exposes the CLI's pending sudo prompt on the run snapshot; the
+  // answer goes back over the same local HTTP API the runs are started with.
+  const sudoPrompt = currentRun?.sudoPrompt?.status === 'requested' ? currentRun.sudoPrompt : null;
+
+  const answerSudoPrompt = useCallback(
+    async (requestId: string, body: { password: string } | { cancel: true }) => {
+      setSudoAnswer({ requestId, submitting: true, error: null });
+      try {
+        const response = await fetch('/api/runs/sudo-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId, ...body }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Backend answered HTTP ${response.status}.`);
+        }
+        const payload = (await response.json()) as BackendCurrentRunResponse;
+        setSudoAnswer({ requestId, submitting: false, error: null });
+        applyRunSnapshot(payload.run);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown backend error.';
+        setSudoAnswer({ requestId, submitting: false, error: `Could not reach the bridge: ${message}` });
+      }
+    },
+    [applyRunSnapshot],
+  );
+
+  const handleSudoSubmit = (password: string) => {
+    if (!sudoPrompt) return;
+    void answerSudoPrompt(sudoPrompt.requestId, { password });
+  };
+
+  const handleSudoCancel = () => {
+    if (!sudoPrompt) return;
+    void answerSudoPrompt(sudoPrompt.requestId, { cancel: true });
+  };
+
   const handleShutdown = () => {
     if (shutdownState !== 'none') return;
     setTerminalLines((previous) => [
@@ -934,6 +980,19 @@ function App() {
 
   return (
     <div className={`flex h-screen flex-col overflow-hidden ${getFontSizeClass(config.fontSize)}`}>
+      {sudoPrompt && (
+        <SudoPasswordModal
+          key={sudoPrompt.requestId}
+          prompt={sudoPrompt}
+          themeColor={config.themeColor}
+          glowEffects={config.glowEffects}
+          submitting={sudoAnswer.requestId === sudoPrompt.requestId && sudoAnswer.submitting}
+          error={sudoAnswer.requestId === sudoPrompt.requestId ? sudoAnswer.error : null}
+          onSubmit={handleSudoSubmit}
+          onCancel={handleSudoCancel}
+        />
+      )}
+
       <TopAppBar
         activeView={activeView}
         onViewChange={setActiveView}

@@ -28,6 +28,7 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 - `ScheduleTask.command` is intended for `sysupdate --snippet <id>` but crontab wiring is not yet implemented
 - `handleRunAll` in `App.tsx` is a stub — only individual snippet upgrades are wired to the live backend
 - `shutdownState` in `App.tsx` swaps the whole tree for `components/ShutdownScreen.tsx` once the bridge confirms it is stopping (`POST /api/shutdown` from this tab, or a `bridge.shutdown` WebSocket message from another); `window.close()` is only attempted by the tab that asked
+- `components/SudoPasswordModal.tsx` overlays the dashboard while `currentRun.sudoPrompt.status === 'requested'` (the CLI is blocked inside sudo); `App.tsx` answers via `POST /api/runs/sudo-password` and never keeps the password in state — the input clears on every new `requestId`, and `rejected: true` shows the "try again" line
 
 ## Run frontend type-check and lint
 

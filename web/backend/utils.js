@@ -44,3 +44,35 @@ export function sanitizeSnippetId(value) {
   }
   return value;
 }
+
+// True for bind addresses that only this machine can reach. The sudo askpass
+// relay sends passwords over plain HTTP/WebSocket, so it is only enabled when
+// the bridge listens on loopback.
+export function isLoopbackHost(host) {
+  if (typeof host !== 'string') {
+    return false;
+  }
+  const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalized);
+}
+
+// Single-quote a string for /bin/sh so it survives any character verbatim.
+export function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// Body validation for POST /api/runs/sudo-password. Returns { requestId,
+// password } (password null = cancel) or { error } for a 400.
+export function parseSudoPasswordRequest(body) {
+  const requestId = body?.requestId;
+  if (typeof requestId !== 'string' || !/^[a-zA-Z0-9._-]+$/.test(requestId)) {
+    return { error: 'requestId must match /^[a-zA-Z0-9._-]+$/.' };
+  }
+  if (body.cancel === true) {
+    return { requestId, password: null };
+  }
+  if (typeof body.password !== 'string' || body.password.length === 0) {
+    return { error: 'password must be a non-empty string, or send { "cancel": true }.' };
+  }
+  return { requestId, password: body.password };
+}

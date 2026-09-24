@@ -176,6 +176,77 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "sudo_can_run: true when SUDO_ASKPASS names an executable helper" {
+    sudo() { return 1; }  # creds not cached, no TTY: only the helper can save it
+    export -f sudo
+    export SUDO_ASKPASS="$BATS_TEST_TMPDIR/askpass"
+    printf '#!/bin/sh\necho secret\n' > "$SUDO_ASKPASS"
+    chmod +x "$SUDO_ASKPASS"
+    run sudo_can_run
+    [ "$status" -eq 0 ]
+}
+
+@test "sudo_can_run: false when SUDO_ASKPASS is set but not executable" {
+    sudo() { return 1; }
+    export -f sudo
+    export SUDO_ASKPASS="$BATS_TEST_TMPDIR/askpass"
+    printf '#!/bin/sh\necho secret\n' > "$SUDO_ASKPASS"
+    run sudo_can_run
+    [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# enable_sudo_askpass_shim
+# ---------------------------------------------------------------------------
+
+@test "askpass shim: puts a sudo wrapper on PATH that adds -A" {
+    export SYSUPDATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+    export SUDO_ASKPASS="$BATS_TEST_TMPDIR/askpass"
+    printf '#!/bin/sh\necho secret\n' > "$SUDO_ASKPASS"
+    chmod +x "$SUDO_ASKPASS"
+    # A fake "real" sudo that just reports how it was called.
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/sh\necho "real-sudo:$*"\n' > "$BATS_TEST_TMPDIR/bin/sudo"
+    chmod +x "$BATS_TEST_TMPDIR/bin/sudo"
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+    enable_sudo_askpass_shim
+    [ "${PATH%%:*}" = "$SYSUPDATE_STATE_DIR/askpass-shim" ]
+    [ -x "$SYSUPDATE_STATE_DIR/askpass-shim/sudo" ]
+
+    run sudo apt-get install -y foo
+    [ "$status" -eq 0 ]
+    [ "$output" = "real-sudo:-A apt-get install -y foo" ]
+}
+
+@test "askpass shim: idempotent, PATH gains the shim dir once" {
+    export SYSUPDATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+    export SUDO_ASKPASS="$BATS_TEST_TMPDIR/askpass"
+    printf '#!/bin/sh\necho secret\n' > "$SUDO_ASKPASS"
+    chmod +x "$SUDO_ASKPASS"
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/sh\necho "real-sudo:$*"\n' > "$BATS_TEST_TMPDIR/bin/sudo"
+    chmod +x "$BATS_TEST_TMPDIR/bin/sudo"
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+    enable_sudo_askpass_shim
+    local once="$PATH"
+    enable_sudo_askpass_shim
+    [ "$PATH" = "$once" ]
+    # The regenerated shim still targets the real binary, not itself.
+    run sudo -n true
+    [ "$output" = "real-sudo:-A -n true" ]
+}
+
+@test "askpass shim: no-op without SUDO_ASKPASS" {
+    export SYSUPDATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+    unset SUDO_ASKPASS
+    local before="$PATH"
+    enable_sudo_askpass_shim
+    [ "$PATH" = "$before" ]
+    [ ! -e "$SYSUPDATE_STATE_DIR/askpass-shim/sudo" ]
+}
+
 # ---------------------------------------------------------------------------
 # run_with_sudo
 # ---------------------------------------------------------------------------

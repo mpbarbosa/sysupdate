@@ -446,6 +446,10 @@ fi
 # Load .bashrc if available
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
 
+# After .bashrc, which may reset PATH: with no terminal and a SUDO_ASKPASS
+# helper (the web bridge provides one), route every sudo prompt through it.
+enable_sudo_askpass_shim
+
 # Handle list snippets mode
 if [ "$LIST_SNIPPETS" = true ]; then
     list_upgrade_snippets

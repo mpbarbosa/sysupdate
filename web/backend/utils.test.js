@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mapTerminalType, stripAnsi, trimArray, sanitizeSnippetId } from './utils.js';
+import {
+  mapTerminalType,
+  stripAnsi,
+  trimArray,
+  sanitizeSnippetId,
+  isLoopbackHost,
+  shellQuote,
+  parseSudoPasswordRequest,
+} from './utils.js';
 
 describe('mapTerminalType', () => {
   it('maps prompt → prompt', () => {
@@ -121,5 +129,59 @@ describe('sanitizeSnippetId', () => {
     expect(sanitizeSnippetId(null)).toBeNull();
     expect(sanitizeSnippetId(42)).toBeNull();
     expect(sanitizeSnippetId(undefined)).toBeNull();
+  });
+});
+
+describe('isLoopbackHost', () => {
+  it('accepts the default bridge address and localhost aliases', () => {
+    expect(isLoopbackHost('127.0.0.1')).toBe(true);
+    expect(isLoopbackHost('127.0.0.53')).toBe(true);
+    expect(isLoopbackHost('localhost')).toBe(true);
+    expect(isLoopbackHost('LOCALHOST')).toBe(true);
+    expect(isLoopbackHost('::1')).toBe(true);
+    expect(isLoopbackHost('[::1]')).toBe(true);
+  });
+
+  it('rejects anything reachable from the network', () => {
+    expect(isLoopbackHost('0.0.0.0')).toBe(false);
+    expect(isLoopbackHost('192.168.1.10')).toBe(false);
+    expect(isLoopbackHost('::')).toBe(false);
+    expect(isLoopbackHost('')).toBe(false);
+    expect(isLoopbackHost(undefined)).toBe(false);
+  });
+});
+
+describe('shellQuote', () => {
+  it('wraps in single quotes', () => {
+    expect(shellQuote('/tmp/a b')).toBe("'/tmp/a b'");
+  });
+
+  it('escapes embedded single quotes', () => {
+    expect(shellQuote("it's")).toBe("'it'\\''s'");
+  });
+});
+
+describe('parseSudoPasswordRequest', () => {
+  it('returns requestId and password for a well-formed body', () => {
+    expect(parseSudoPasswordRequest({ requestId: 'sudo-bridge-1-1', password: 'hunter2' })).toEqual({
+      requestId: 'sudo-bridge-1-1',
+      password: 'hunter2',
+    });
+  });
+
+  it('maps cancel: true to a null password', () => {
+    expect(parseSudoPasswordRequest({ requestId: 'sudo-1', cancel: true })).toEqual({ requestId: 'sudo-1', password: null });
+  });
+
+  it('rejects a missing or malformed requestId', () => {
+    expect(parseSudoPasswordRequest({ password: 'x' }).error).toMatch(/requestId/);
+    expect(parseSudoPasswordRequest({ requestId: '../x', password: 'x' }).error).toMatch(/requestId/);
+    expect(parseSudoPasswordRequest(null).error).toMatch(/requestId/);
+  });
+
+  it('rejects an empty or non-string password without cancel', () => {
+    expect(parseSudoPasswordRequest({ requestId: 'sudo-1' }).error).toMatch(/password/);
+    expect(parseSudoPasswordRequest({ requestId: 'sudo-1', password: '' }).error).toMatch(/password/);
+    expect(parseSudoPasswordRequest({ requestId: 'sudo-1', password: 42 }).error).toMatch(/password/);
   });
 });

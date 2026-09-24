@@ -28,9 +28,10 @@ which shuts down both child processes.
 
 Options:
     -i, --interactive   Authenticate sudo up front and keep the credentials
-                        alive for the whole session, so package updates
-                        triggered from the dashboard (which the backend runs
-                        without a TTY) can install without failing on sudo.
+                        alive for the whole session, so the dashboard never
+                        has to ask for the password. Without it, an update
+                        that needs root opens a password prompt in the
+                        dashboard (the backend relays sudo's askpass call).
                         A backend already running from an earlier session is
                         restarted so it inherits these credentials.
     -h, --help          Show this help message and exit

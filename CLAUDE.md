@@ -139,6 +139,11 @@ logic. Treat schema changes as breaking.
 - `emit_event <type> <key> <value> …` writes a sequenced JSON line; helpers `emit_summary_event`
   (`summary.updates`) and the `terminal.line` / `log.entry` / `prompt.requested` / `prompt.resolved`
   / `sudo.required` event types build on it. `enable_json_events` assigns a `SYSUPDATE_RUN_ID`.
+- Sudo without a terminal: `sudo_can_run` also accepts an executable `SUDO_ASKPASS`, and
+  `enable_sudo_askpass_shim` (called by the orchestrator when there is no TTY) puts a `sudo`
+  wrapper that adds `-A` first on PATH, because sudo-rs never falls back to the helper on its own.
+  The web bridge supplies a helper that relays the prompt to the dashboard; `sudo.required`
+  events carry `askpass: true|false`.
 - Run history is appended as JSONL to `SYSUPDATE_LOG_FILE`
   (default `~/.local/state/sysupdate/run-history.jsonl`, under `SYSUPDATE_STATE_DIR`).
 - The integration suite (`tests/integration/`) validates this schema — update those tests when

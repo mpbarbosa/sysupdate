@@ -2,11 +2,20 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { mapTerminalType, stripAnsi, trimArray, sanitizeSnippetId } from './utils.js';
+import {
+  mapTerminalType,
+  stripAnsi,
+  trimArray,
+  sanitizeSnippetId,
+  isLoopbackHost,
+  shellQuote,
+  parseSudoPasswordRequest,
+} from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +37,14 @@ const PROGRESS_LINE_RE = /^\s*\d+[KMG][ .]+\d+%/;
 const LOG_FILE =
   process.env.SYSUPDATE_LOG_FILE ??
   path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), '.local', 'state'), 'sysupdate', 'run-history.jsonl');
+// The child CLI has no terminal, so sudo cannot prompt for a password itself.
+// The bridge hands it a SUDO_ASKPASS helper (sudo_askpass.mjs) that relays the
+// prompt over a unix socket; the bridge shows it on the dashboard and passes
+// the answer back. Passwords travel over the dashboard's plain HTTP connection,
+// so the relay is only enabled on a loopback bind (or turned off explicitly).
+const SUDO_RELAY_ENABLED = isLoopbackHost(HOST) && process.env.SYSUPDATE_SUDO_RELAY !== 'false';
+const ASKPASS_HELPER_SCRIPT = path.join(__dirname, 'sudo_askpass.mjs');
+const SUDO_REQUEST_MAX_BYTES = 4096;
 
 const clients = new Set();
 const snippetIdByModule = new Map();
@@ -35,6 +52,8 @@ const snippetIdByModule = new Map();
 let activeChild = null;
 let currentRun = null;
 let shuttingDown = false;
+// { dir, socketPath, helperPath, server } once listening; null when disabled.
+let askpassRelay = null;
 
 function setCorsHeaders(response) {
   response.setHeader('Access-Control-Allow-Origin', `http://${HOST}:5173`);
@@ -62,10 +81,25 @@ function createRunState(args) {
     runId: null,
     prompt: null,
     lastLogEntry: null,
+    // The dashboard-facing view of the latest sudo prompt (never the password).
+    sudoPrompt: null,
     terminalLines: [],
     rawEvents: [],
     summariesByKey: {},
+    // In-memory only, wiped when the child exits. `answeredPids` records which
+    // sudo invocations already got `cachedPassword`: the same one asking again
+    // means it was rejected.
+    sudo: {
+      cachedPassword: null,
+      answeredPids: new Set(),
+      pending: new Map(),
+      sequence: 0,
+    },
   };
+}
+
+function isRunActive(run) {
+  return run !== null && (run.status === 'starting' || run.status === 'running');
 }
 
 function resolveSnippetIdFromModule(moduleName) {
@@ -116,6 +150,7 @@ function getRunSnapshot() {
     runId: currentRun.runId,
     prompt: currentRun.prompt,
     lastLogEntry: currentRun.lastLogEntry,
+    sudoPrompt: currentRun.sudoPrompt,
     terminalLines: currentRun.terminalLines,
     summaries: Object.values(currentRun.summariesByKey),
   };
@@ -285,6 +320,187 @@ function processOutputLine(line, streamName, run = currentRun) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// sudo askpass relay
+// ---------------------------------------------------------------------------
+
+function replyToAskpass(socket, password) {
+  try {
+    socket.end(`${JSON.stringify(password === null ? { cancelled: true } : { password })}\n`);
+  } catch {
+    socket.destroy();
+  }
+}
+
+function setSudoPromptStatus(run, requestId, status) {
+  if (run.sudoPrompt?.requestId === requestId && run.sudoPrompt.status === 'requested') {
+    run.sudoPrompt = { ...run.sudoPrompt, status };
+    return true;
+  }
+  return false;
+}
+
+// A helper connected and asked for a password on behalf of one sudo invocation.
+function handleSudoPasswordRequest(socket, request) {
+  const run = currentRun;
+  if (!isRunActive(run)) {
+    replyToAskpass(socket, null);
+    return;
+  }
+
+  const relay = run.sudo;
+  const sudoPid = Number.isInteger(request.sudoPid) ? request.sudoPid : null;
+  const prompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '[sudo] password:';
+  const rejected = sudoPid !== null && relay.answeredPids.has(sudoPid);
+
+  if (rejected) {
+    // sudo asked the same invocation again: the last answer was wrong.
+    relay.cachedPassword = null;
+  } else if (relay.cachedPassword !== null) {
+    if (sudoPid !== null) {
+      relay.answeredPids.add(sudoPid);
+    }
+    replyToAskpass(socket, relay.cachedPassword);
+    return;
+  }
+
+  relay.sequence += 1;
+  const requestId = `sudo-${run.id}-${relay.sequence}`;
+  relay.pending.set(requestId, { socket, sudoPid });
+  run.sudoPrompt = { requestId, prompt, rejected, status: 'requested', requestedAt: new Date().toISOString() };
+
+  // sudo gave up (timeout), the child died, or the bridge cancelled it.
+  socket.on('close', () => {
+    if (relay.pending.get(requestId)?.socket !== socket) {
+      return;
+    }
+    relay.pending.delete(requestId);
+    if (setSudoPromptStatus(run, requestId, 'expired')) {
+      addTerminalLine('Sudo stopped waiting before the dashboard answered.', 'warning', 'bridge', run);
+      if (run === currentRun) {
+        broadcastSnapshot('sudo.prompt.expired');
+      }
+    }
+  });
+
+  addTerminalLine(
+    rejected ? 'Sudo rejected that password. Asking the dashboard again...' : 'Sudo needs your password. Asking the dashboard...',
+    rejected ? 'warning' : 'prompt',
+    'bridge',
+    run,
+  );
+  if (run === currentRun) {
+    broadcastSnapshot('sudo.prompt.requested');
+  }
+}
+
+function handleAskpassConnection(socket) {
+  let buffer = '';
+  socket.setEncoding('utf8');
+  socket.on('error', () => {});
+  const onData = (chunk) => {
+    buffer += chunk;
+    const newline = buffer.indexOf('\n');
+    if (newline === -1) {
+      if (buffer.length > SUDO_REQUEST_MAX_BYTES) {
+        socket.destroy();
+      }
+      return;
+    }
+    socket.off('data', onData);
+
+    let request;
+    try {
+      request = JSON.parse(buffer.slice(0, newline));
+    } catch {
+      socket.destroy();
+      return;
+    }
+    handleSudoPasswordRequest(socket, request && typeof request === 'object' ? request : {});
+  };
+  socket.on('data', onData);
+}
+
+// Answer (password) or cancel (null) the pending prompt `requestId`.
+function resolveSudoPrompt(requestId, password) {
+  const run = currentRun;
+  const entry = run?.sudo.pending.get(requestId);
+  if (!entry) {
+    return { ok: false, statusCode: 404, error: 'No sudo prompt is waiting for that requestId.' };
+  }
+
+  run.sudo.pending.delete(requestId);
+  if (password === null) {
+    replyToAskpass(entry.socket, null);
+    setSudoPromptStatus(run, requestId, 'cancelled');
+    addTerminalLine('Sudo prompt cancelled from the dashboard.', 'warning', 'bridge', run);
+  } else {
+    run.sudo.cachedPassword = password;
+    if (entry.sudoPid !== null) {
+      run.sudo.answeredPids.add(entry.sudoPid);
+    }
+    replyToAskpass(entry.socket, password);
+    setSudoPromptStatus(run, requestId, 'resolved');
+    addTerminalLine('Sudo password received from the dashboard.', 'dim', 'bridge', run);
+  }
+  broadcastSnapshot('sudo.prompt.resolved');
+  return { ok: true, statusCode: 202 };
+}
+
+// Drop everything sudo-related a run holds: pending helpers get a cancel, the
+// password leaves memory. Called when the child exits and at shutdown.
+function clearSudoState(run) {
+  if (!run) {
+    return;
+  }
+  for (const [requestId, entry] of run.sudo.pending) {
+    run.sudo.pending.delete(requestId);
+    replyToAskpass(entry.socket, null);
+    setSudoPromptStatus(run, requestId, 'expired');
+  }
+  run.sudo.cachedPassword = null;
+  run.sudo.answeredPids.clear();
+}
+
+function startAskpassRelay() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'sysupdate-askpass-'));
+  const socketPath = path.join(dir, 'askpass.sock');
+  const helperPath = path.join(dir, 'askpass');
+
+  // sudo runs SUDO_ASKPASS with no arguments of ours, so the socket path is
+  // baked into a wrapper instead of relying on environment inheritance.
+  writeFileSync(
+    helperPath,
+    [
+      '#!/bin/sh',
+      '# Generated by the sysupdate web bridge. Relays sudo password prompts to the dashboard.',
+      `SYSUPDATE_ASKPASS_SOCKET=${shellQuote(socketPath)} exec ${shellQuote(process.execPath)} ${shellQuote(ASKPASS_HELPER_SCRIPT)} "$@"`,
+      '',
+    ].join('\n'),
+    { mode: 0o700 },
+  );
+
+  const relayServer = net.createServer(handleAskpassConnection);
+  relayServer.on('error', (error) => {
+    console.error(`sysupdate backend: sudo askpass relay failed — ${error?.message ?? error}`);
+    askpassRelay = null;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  relayServer.listen(socketPath, () => {
+    askpassRelay = { dir, socketPath, helperPath, server: relayServer };
+  });
+}
+
+function stopAskpassRelay() {
+  const relay = askpassRelay;
+  askpassRelay = null;
+  if (!relay) {
+    return;
+  }
+  relay.server.close();
+  rmSync(relay.dir, { recursive: true, force: true });
+}
+
 function attachLineReader(stream, streamName, run) {
   let buffer = '';
 
@@ -339,6 +555,7 @@ function startRun(options = {}) {
       ...process.env,
       SYSUPDATE_JSON_EVENTS: 'true',
       ...(promptInput ? { SYSUPDATE_PROMPT_INPUT: promptInput.promptInputPath } : {}),
+      ...(askpassRelay ? { SUDO_ASKPASS: askpassRelay.helperPath } : {}),
     },
   });
   activeChild = child;
@@ -379,6 +596,7 @@ function startRun(options = {}) {
       activeChild = null;
     }
     cleanupPromptInput();
+    clearSudoState(run);
     if (run === currentRun) {
       broadcastSnapshot('process.closed');
     }
@@ -487,7 +705,15 @@ const server = createServer(async (request, response) => {
           host: HOST,
           port: PORT,
           websocketPath: '/ws',
-          supports: ['logs', 'check-only-run', 'snippet-upgrade-run', 'json-events', 'run-history', 'shutdown'],
+          supports: [
+            'logs',
+            'check-only-run',
+            'snippet-upgrade-run',
+            'json-events',
+            'run-history',
+            'shutdown',
+            ...(SUDO_RELAY_ENABLED ? ['sudo-askpass'] : []),
+          ],
         },
         logs,
         run: getRunSnapshot(),
@@ -530,6 +756,23 @@ const server = createServer(async (request, response) => {
       }
 
       sendJson(response, result.statusCode, { run: result.payload });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/runs/sudo-password') {
+      const parsed = parseSudoPasswordRequest(await readRequestJson(request));
+      if (parsed.error) {
+        sendJson(response, 400, { error: parsed.error });
+        return;
+      }
+
+      const result = resolveSudoPrompt(parsed.requestId, parsed.password);
+      if (!result.ok) {
+        sendJson(response, result.statusCode, { error: result.error });
+        return;
+      }
+
+      sendJson(response, result.statusCode, { run: getRunSnapshot() });
       return;
     }
 
@@ -614,6 +857,11 @@ websocketServer.on('error', handleListenError);
 
 server.listen(PORT, HOST, () => {
   console.log(`sysupdate local backend bridge listening on http://${HOST}:${PORT}`);
+  if (SUDO_RELAY_ENABLED) {
+    startAskpassRelay();
+  } else {
+    console.log('sysupdate backend: sudo askpass relay disabled (non-loopback bind or SYSUPDATE_SUDO_RELAY=false)');
+  }
 });
 
 function shutdown(reason = 'requested') {
@@ -622,6 +870,11 @@ function shutdown(reason = 'requested') {
   }
   shuttingDown = true;
   console.log(`sysupdate backend: shutting down (${reason})`);
+
+  // Unblock any sudo waiting on the dashboard before signalling the child, so
+  // the CLI can fail that step and exit instead of hanging inside sudo.
+  clearSudoState(currentRun);
+  stopAskpassRelay();
 
   if (activeChild?.pid) {
     activeChild.kill('SIGTERM');

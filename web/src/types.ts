@@ -66,6 +66,18 @@ export interface BackendRunPrompt {
   responseSource?: string;
 }
 
+// A sudo password prompt raised by the CLI the bridge spawned. The bridge
+// relays sudo's askpass call to the dashboard; the password itself never
+// appears in a snapshot.
+export interface BackendSudoPrompt {
+  requestId: string;
+  prompt: string;
+  // True when sudo asked the same invocation again: the last answer was wrong.
+  rejected: boolean;
+  status: 'requested' | 'resolved' | 'cancelled' | 'expired';
+  requestedAt?: string;
+}
+
 export interface BackendSummaryEvent {
   event_type: 'summary.updates';
   summary_name: string;
@@ -86,6 +98,7 @@ export interface BackendRunSnapshot {
   runId: string | null;
   prompt: BackendRunPrompt | null;
   lastLogEntry: Record<string, unknown> | null;
+  sudoPrompt?: BackendSudoPrompt | null;
   terminalLines: BackendTerminalLine[];
   summaries: BackendSummaryEvent[];
 }

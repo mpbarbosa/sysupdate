@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-stub",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd web && SYSUPDATE_WEB_PORT=14175 SYSUPDATE_SCRIPT_PATH=\"$PWD/../tests/backend/fixtures/stub_script.sh\" node backend/server.js"
+      ],
+      "port": 14175
+    },
+    {
+      "name": "web-dev-stub",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd web && SYSUPDATE_WEB_PORT=14175 npx vite --port 5174 --strictPort"
+      ],
+      "port": 5174
+    }
+  ]
+}

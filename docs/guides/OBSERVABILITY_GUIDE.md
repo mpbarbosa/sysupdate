@@ -33,7 +33,7 @@ Every event has these base fields:
 
 | Field | Description |
 | --- | --- |
-| `event_type` | Dot-namespaced type: `run.started`, `terminal.line`, `summary.updates`, `prompt.requested`, `run.completed`, `run.failed`, `log.entry` |
+| `event_type` | Dot-namespaced type: `run.started`, `terminal.line`, `summary.updates`, `prompt.requested`, `sudo.required`, `run.completed`, `run.failed`, `log.entry` |
 | `timestamp` | ISO 8601 with timezone offset |
 | `sequence` | Integer, monotonically increasing within a run |
 | `pid` | Process ID of the CLI process |
