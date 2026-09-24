@@ -77,7 +77,23 @@ update_github_copilot_cli() {
         return 1
     fi
 
-    # Also update system-wide installation if present (e.g. /usr/local/bin/copilot)
+    # Also update system-wide installation if present (e.g. /usr/local/bin/copilot).
+    #
+    # This runs outside handle_update_prompt, so it has to repeat that
+    # function's two gates itself. It previously had neither, and
+    # `npm install -g --force` obeys nothing on its own: the CLI was
+    # reinstalled on every invocation even when already current, and — worse —
+    # during --check-only, which is documented to make no changes. A run with
+    # cached sudo credentials would have written to the system mid-scan.
+    if [ "${VERSION_STATUS:-0}" -ne 2 ]; then
+        return 0
+    fi
+
+    if [ "$CHECK_ONLY_MODE" = true ]; then
+        print_status "Check-only mode - skipping system-wide $APP_DISPLAY_NAME update"
+        return 0
+    fi
+
     local system_npm="/usr/local/bin/npm"
     local system_copilot="/usr/local/bin/copilot"
     if [ -f "$system_copilot" ] && [ -f "$system_npm" ]; then
