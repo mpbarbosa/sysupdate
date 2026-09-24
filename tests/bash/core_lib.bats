@@ -100,19 +100,60 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "compare_versions: stable release newer than alpha-suffixed pre-release" {
+# A single bare letter is a patch release (tmux 3.7 -> 3.7a -> 3.7c, OpenSSL
+# 1.1.1w), so the suffixed version is NEWER. These two cases previously
+# asserted the opposite, which hid a real tmux 3.7 -> 3.7c update behind a
+# "version is newer than latest release" message.
+@test "compare_versions: single-letter suffix is a patch release, so newer" {
     run compare_versions "3.6" "3.6a"
+    [ "$status" -eq 2 ]
+}
+
+@test "compare_versions: bare version is older than its patch release" {
+    run compare_versions "3.6a" "3.6"
     [ "$status" -eq 1 ]
 }
 
-@test "compare_versions: pre-release older than stable release" {
-    run compare_versions "3.6a" "3.6"
+@test "compare_versions: patch letters order alphabetically" {
+    run compare_versions "3.7a" "3.7c"
+    [ "$status" -eq 2 ]
+}
+
+@test "compare_versions: the real tmux case (3.7 -> 3.7c)" {
+    run compare_versions "3.7" "3.7c"
     [ "$status" -eq 2 ]
 }
 
 @test "compare_versions: identical alpha-suffixed versions are equal" {
     run compare_versions "3.6a" "3.6a"
     [ "$status" -eq 0 ]
+}
+
+# A delimiter or a word marks a prerelease, which orders the other way: the
+# bare release is newer. This is the Android Studio / JDK early-access shape
+# and must survive the patch-letter change above.
+@test "compare_versions: delimited prerelease is older than its release" {
+    run compare_versions "25.0.3-ea" "25.0.3"
+    [ "$status" -eq 2 ]
+}
+
+@test "compare_versions: release is newer than its delimited prerelease" {
+    run compare_versions "25.0.3" "25.0.3-ea"
+    [ "$status" -eq 1 ]
+}
+
+@test "compare_versions: word suffix is a prerelease, not a patch level" {
+    run compare_versions "1.0" "1.0rc1"
+    [ "$status" -eq 1 ]
+}
+
+@test "version_suffix_is_patch_level: single letter yes, word and delimiter no" {
+    run version_suffix_is_patch_level "c"
+    [ "$status" -eq 0 ]
+    run version_suffix_is_patch_level "-ea"
+    [ "$status" -ne 0 ]
+    run version_suffix_is_patch_level "rc1"
+    [ "$status" -ne 0 ]
 }
 
 @test "compare_versions: major version bump detected" {

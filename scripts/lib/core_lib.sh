@@ -574,6 +574,25 @@ normalize_version_for_comparison() {
     echo "$version"
 }
 
+# True when a version's trailing letters mark a patch release rather than a
+# prerelease.
+#
+# Two conventions append letters to a version and they order in OPPOSITE
+# directions, so the suffix alone cannot decide which is newer:
+#
+#   patch letter   3.7 < 3.7a < 3.7c        tmux, OpenSSL (1.1.1w)
+#   prerelease     25.0.3-ea < 25.0.3       early access, rc, beta
+#
+# What separates them is how the suffix attaches. A patch level is a single
+# bare letter run straight onto the digits. A prerelease arrives with a
+# delimiter (-ea, ~rc1, +build) or as a word (rc1, beta2), so anything longer
+# than one letter, or carrying punctuation, is treated as a prerelease — the
+# conservative reading, since calling a real patch release a prerelease only
+# understates an available update, while the reverse hides one.
+version_suffix_is_patch_level() {
+    [[ "$1" =~ ^[a-z]$ ]]
+}
+
 compare_versions() {
     local version1="$1"
     local version2="$2"
@@ -635,13 +654,21 @@ compare_versions() {
             return 2
         fi
 
-        # If numeric parts are equal, compare alphabetic suffixes
+        # If numeric parts are equal, compare alphabetic suffixes. Which side
+        # is newer depends on what the suffix means — see
+        # version_suffix_is_patch_level.
         if [ "$alpha1" != "$alpha2" ]; then
             if [ -z "$alpha1" ] && [ -n "$alpha2" ]; then
-                # 3.6 > 3.6a (stable release is newer than suffixed prerelease)
+                # 3.7 < 3.7c (patch release) but 25.0.3 > 25.0.3-ea (prerelease)
+                if version_suffix_is_patch_level "$alpha2"; then
+                    return 2
+                fi
                 return 1
             elif [ -n "$alpha1" ] && [ -z "$alpha2" ]; then
-                # 3.6a < 3.6
+                # 3.7c > 3.7 (patch release) but 25.0.3-ea < 25.0.3 (prerelease)
+                if version_suffix_is_patch_level "$alpha1"; then
+                    return 1
+                fi
                 return 2
             elif [[ "$alpha1" > "$alpha2" ]]; then
                 return 1
