@@ -311,3 +311,57 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"ran-ok"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# emit_summary_event: snippet_id tagging
+# ---------------------------------------------------------------------------
+#
+# Consumers use snippet_id to re-run exactly one snippet (`--snippet <id>`).
+# It reaches the event from two places: SYSUPDATE_CURRENT_SNIPPET_ID, set by
+# source_snippet_isolated while a snippet runs, and the caller's own key/value
+# pairs, used by lib/ modules that a snippet also exposes (apt_manager.sh, run
+# as `--snippet apt`). Both at once must still emit the key once.
+
+# Capture the JSON line emit_summary_event writes to stderr.
+emit_summary_line() {
+    enable_json_events
+    emit_summary_event "$@" 2>&1 1>/dev/null
+}
+
+@test "emit_summary_event: tags the event with the running snippet's id" {
+    SYSUPDATE_CURRENT_SNIPPET_ID="firefox"
+    run emit_summary_line "version_check" "target" "Firefox" "status" "up_to_date"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"snippet_id":"firefox"'* ]]
+    [[ "$output" == *'"target":"Firefox"'* ]]
+}
+
+@test "emit_summary_event: omits snippet_id outside a snippet" {
+    SYSUPDATE_CURRENT_SNIPPET_ID=""
+    run emit_summary_line "pacman_updates" "package_manager" "pacman" "status" "up_to_date"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *'"snippet_id"'* ]]
+}
+
+@test "emit_summary_event: keeps a caller-supplied snippet_id" {
+    SYSUPDATE_CURRENT_SNIPPET_ID=""
+    run emit_summary_line "apt_updates" "snippet_id" "apt" "package_manager" "apt" "status" "up_to_date"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"snippet_id":"apt"'* ]]
+}
+
+@test "emit_summary_event: does not emit snippet_id twice when both sources name it" {
+    SYSUPDATE_CURRENT_SNIPPET_ID="apt"
+    run emit_summary_line "apt_updates" "snippet_id" "apt" "package_manager" "apt" "status" "up_to_date"
+    [ "$status" -eq 0 ]
+    # A duplicated key would make the line invalid for strict JSON consumers.
+    [ "$(grep -c '"snippet_id"' <<< "$output")" -eq 1 ]
+}
+
+@test "emit_summary_event: a value that reads 'snippet_id' is not mistaken for the key" {
+    SYSUPDATE_CURRENT_SNIPPET_ID="firefox"
+    run emit_summary_line "version_check" "target" "snippet_id" "status" "up_to_date"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"snippet_id":"firefox"'* ]]
+    [[ "$output" == *'"target":"snippet_id"'* ]]
+}

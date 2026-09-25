@@ -17,6 +17,12 @@ if [ -z "$BLUE" ]; then
     source "$SCRIPT_DIR/core_lib.sh"
 fi
 
+# The snippet id a consumer passes to act on what this module reports
+# (`--snippet apt`, wired up by upgrade_snippets/update_apt.sh). apt is checked
+# by the orchestrator itself, outside snippet sourcing, so these summaries do
+# not get tagged automatically the way a snippet's do — they name it here.
+APT_SNIPPET_ID="apt"
+
 #=============================================================================
 # APT PACKAGE MANAGER FUNCTIONS
 #=============================================================================
@@ -462,11 +468,11 @@ check_updates_available() {
         upgradable_count=$(apt list --upgradable 2>/dev/null | grep -c "upgradable")
         if [ "$upgradable_count" -gt 0 ]; then
             print_status "Found $upgradable_count packages available for upgrade (via apt list)"
-            emit_summary_event "apt_updates" "package_manager" "apt" "status" "update_available" "total_updates" "$upgradable_count" "security_updates" "unknown"
+            emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "update_available" "total_updates" "$upgradable_count" "security_updates" "unknown"
             return 0
         else
             print_success "No packages available for upgrade (via apt list)"
-            emit_summary_event "apt_updates" "package_manager" "apt" "status" "up_to_date" "total_updates" "0" "security_updates" "unknown"
+            emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "up_to_date" "total_updates" "0" "security_updates" "unknown"
             return 1
         fi
     fi
@@ -478,7 +484,7 @@ check_updates_available() {
     if [ $check_exit_code -ne 0 ]; then
         print_warning "apt-check returned error code $check_exit_code"
         print_status "Proceeding with upgrade operation anyway..."
-        emit_summary_event "apt_updates" "package_manager" "apt" "status" "unknown" "total_updates" "unknown" "security_updates" "unknown"
+        emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "unknown" "total_updates" "unknown" "security_updates" "unknown"
         return 0
     fi
 
@@ -490,13 +496,13 @@ check_updates_available() {
     if ! [[ "$total_updates" =~ ^[0-9]+$ ]] || ! [[ "$security_updates" =~ ^[0-9]+$ ]]; then
         print_warning "Unable to parse apt-check output: '$check_output'"
         print_status "Proceeding with upgrade operation anyway..."
-        emit_summary_event "apt_updates" "package_manager" "apt" "status" "unknown" "total_updates" "unknown" "security_updates" "unknown"
+        emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "unknown" "total_updates" "unknown" "security_updates" "unknown"
         return 0
     fi
     
     if [ "$total_updates" -eq 0 ]; then
         print_success "✅ No package updates available - system is up to date"
-        emit_summary_event "apt_updates" "package_manager" "apt" "status" "up_to_date" "total_updates" "$total_updates" "security_updates" "$security_updates"
+        emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "up_to_date" "total_updates" "$total_updates" "security_updates" "$security_updates"
         return 1
     else
         print_status "📊 Update summary:"
@@ -508,7 +514,7 @@ check_updates_available() {
             print_status "  🔒 Security updates available: 0"
         fi
         print_status "Proceeding with package upgrade operation..."
-        emit_summary_event "apt_updates" "package_manager" "apt" "status" "update_available" "total_updates" "$total_updates" "security_updates" "$security_updates"
+        emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "update_available" "total_updates" "$total_updates" "security_updates" "$security_updates"
         return 0
     fi
 }

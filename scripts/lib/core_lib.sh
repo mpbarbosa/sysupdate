@@ -150,13 +150,34 @@ emit_summary_event() {
     local summary_name="$1"
     shift
 
-    if [ -n "${SYSUPDATE_CURRENT_SNIPPET_ID:-}" ]; then
+    if [ "$(summary_names_snippet "$@")" = false ] && [ -n "${SYSUPDATE_CURRENT_SNIPPET_ID:-}" ]; then
         emit_event "summary.updates" "summary_name" "$summary_name" \
             "snippet_id" "$SYSUPDATE_CURRENT_SNIPPET_ID" "$@"
         return
     fi
 
     emit_event "summary.updates" "summary_name" "$summary_name" "$@"
+}
+
+# True when a caller's key/value pairs already carry a "snippet_id" key.
+#
+# A lib/ module that a snippet also exposes (apt_manager.sh, reachable as
+# `--snippet apt`) names its own id, and when that snippet is the one running,
+# SYSUPDATE_CURRENT_SNIPPET_ID is set as well. Emitting the key from both
+# sources would put it in the object twice.
+summary_names_snippet() {
+    local index=0
+
+    while [ "$#" -gt 0 ]; do
+        if [ $((index % 2)) -eq 0 ] && [ "$1" = "snippet_id" ]; then
+            echo true
+            return 0
+        fi
+        index=$((index + 1))
+        shift
+    done
+
+    echo false
 }
 
 ensure_sysupdate_state_dir() {

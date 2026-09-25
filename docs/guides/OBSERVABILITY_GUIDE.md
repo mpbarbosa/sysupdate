@@ -47,13 +47,24 @@ Additional fields are added per event type. The `summary.updates` event adds
 for a status the snippet cannot resolve on its own — an optional `remediation`
 string naming the host-side fix (see rule 1).
 
-It also adds `snippet_id` whenever the event came from a snippet: consumers
-need it to re-run exactly that one (`--snippet <id>`). Snippets do not pass it
-themselves — `source_snippet_isolated` sets `SYSUPDATE_CURRENT_SNIPPET_ID` from
-each file's own `# SNIPPET_ID:` header and `emit_summary_event` attaches it, so
-a new snippet gets it for free. Summaries emitted from `lib/` modules (the
-package-manager inventories) run outside a snippet, so the field is absent
-there.
+It also adds `snippet_id` — the id a consumer passes to act on what the summary
+reports (`--snippet <id>`). It reaches the event from two places:
+
+1. **Automatically, for snippets.** `source_snippet_isolated` sets
+   `SYSUPDATE_CURRENT_SNIPPET_ID` from each file's own `# SNIPPET_ID:` header
+   and `emit_summary_event` attaches it, so a new snippet gets it for free.
+2. **Named by the caller**, for a `lib/` module that a snippet also exposes.
+   `apt_manager.sh` runs from the orchestrator, outside snippet sourcing, but
+   `--snippet apt` acts on exactly what it reports, so it passes
+   `"snippet_id" "$APT_SNIPPET_ID"` itself.
+
+When both name it — `--snippet apt` delegating into `apt_manager.sh` — the key
+is emitted once; `emit_summary_event` skips the automatic tag if the caller
+already supplied one.
+
+The field is absent where no snippet can act on the summary: `pacman_updates`
+and `package_integrity` (dpkg) have no snippet, so a consumer has nothing to
+call, and claiming an id there would name a target that does not exist.
 The `terminal.line` event adds `line_type` and `message`.
 
 ## Emitting events in Bash
