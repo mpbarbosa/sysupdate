@@ -5,6 +5,7 @@ import DashboardView from './components/DashboardView';
 import ShutdownScreen from './components/ShutdownScreen';
 import SudoPasswordModal from './components/SudoPasswordModal';
 import { countHiddenUpToDate, filterUpdateItems } from './updateFilter';
+import { pruneAutoUpdateIds } from './updateCard';
 import LogsView from './components/LogsView';
 import ScheduleView from './components/ScheduleView';
 import SettingsView from './components/SettingsView';
@@ -413,6 +414,19 @@ function App() {
         mergedItems.set(item.id, item);
       });
       return Array.from(mergedItems.values());
+    });
+
+    // Drop saved ticks for items this batch shows can never be auto-updated, so
+    // a preference the card no longer offers any way to clear does not linger
+    // in localStorage. Only what these summaries reported is considered, and
+    // pruneAutoUpdateIds returns the same Set when nothing is stale, so a
+    // normal scan neither writes nor re-renders.
+    setAutoUpdateIds((previous) => {
+      const next = pruneAutoUpdateIds(previous, nextItems);
+      if (next !== previous) {
+        saveAutoUpdateIds(next);
+      }
+      return next;
     });
   }, []);
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { toCardAffordances, DEFAULT_BLOCKED_REMEDIATION,
+import {
+  toCardAffordances,
+  pruneAutoUpdateIds,
+  DEFAULT_BLOCKED_REMEDIATION,
   SELF_MANAGED_AUTO_UPDATE_NOTE,
   NO_SNIPPET_AUTO_UPDATE_NOTE,
 } from './updateCard';
@@ -146,6 +149,54 @@ describe('toCardAffordances', () => {
           autoUpdateNote: NO_SNIPPET_AUTO_UPDATE_NOTE,
         });
       }
+    });
+  });
+
+  describe('pruneAutoUpdateIds', () => {
+    const ids = () => new Set(['apps-android-studio', 'apps-lazygit', 'apps-gone']);
+
+    it('drops a tick for an item this scan shows is self-managed', () => {
+      const next = pruneAutoUpdateIds(ids(), [
+        { id: 'apps-android-studio', status: 'self_managed', snippetId: 'android-studio' },
+      ]);
+      expect(next.has('apps-android-studio')).toBe(false);
+    });
+
+    it('drops a tick for an item with no snippet to run', () => {
+      const next = pruneAutoUpdateIds(ids(), [{ id: 'apps-lazygit', status: 'ready' }]);
+      expect(next.has('apps-lazygit')).toBe(false);
+    });
+
+    it('keeps ticks for items this scan did not report', () => {
+      // A filtered run (--snippet android-studio) says nothing about the rest.
+      const next = pruneAutoUpdateIds(ids(), [
+        { id: 'apps-android-studio', status: 'self_managed', snippetId: 'android-studio' },
+      ]);
+      expect(next.has('apps-lazygit')).toBe(true);
+      expect(next.has('apps-gone')).toBe(true);
+    });
+
+    it('keeps a tick for a blocked item — the host fix makes it runnable', () => {
+      const next = pruneAutoUpdateIds(ids(), [
+        { id: 'apps-lazygit', status: 'blocked', snippetId: 'lazygit' },
+      ]);
+      expect(next.has('apps-lazygit')).toBe(true);
+    });
+
+    it('returns the same Set when nothing is stale, so no write and no re-render', () => {
+      const before = ids();
+      const after = pruneAutoUpdateIds(before, [
+        { id: 'apps-lazygit', status: 'up_to_date', snippetId: 'lazygit' },
+      ]);
+      expect(after).toBe(before);
+    });
+
+    it('ignores unsupported items that were never ticked', () => {
+      const before = new Set(['apps-lazygit']);
+      const after = pruneAutoUpdateIds(before, [
+        { id: 'apps-android-studio', status: 'self_managed', snippetId: 'android-studio' },
+      ]);
+      expect(after).toBe(before);
     });
   });
 });

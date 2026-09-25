@@ -93,6 +93,36 @@ function hasRealLatest(
 }
 
 /**
+ * `ids` with every tick dropped that `items` positively shows can never run.
+ *
+ * A preference saved before an item was known to be un-auto-updatable — or by a
+ * build that offered the checkbox on every card — would otherwise sit in
+ * localStorage forever, invisible, because the card no longer renders a
+ * checkbox to untick. Only ids present in `items` are considered: a filtered
+ * run (`--snippet foo`) reports one item and says nothing about the rest, so an
+ * id this scan did not mention is left alone.
+ *
+ * Returns `ids` itself when nothing was stale, so callers can skip the write
+ * and React can bail out of the state update.
+ */
+export function pruneAutoUpdateIds(
+  ids: Set<string>,
+  items: Pick<UpdateItem, 'id' | 'status' | 'snippetId'>[],
+): Set<string> {
+  const stale = items.filter(
+    (item) => ids.has(item.id) && !autoUpdate(item).autoUpdateSupported,
+  );
+
+  if (stale.length === 0) {
+    return ids;
+  }
+
+  const next = new Set(ids);
+  stale.forEach((item) => next.delete(item.id));
+  return next;
+}
+
+/**
  * Whether scheduling an unattended upgrade for `item` could ever do anything.
  *
  * Deliberately NOT `actionEnabled`: an up-to-date item has an inert button but
