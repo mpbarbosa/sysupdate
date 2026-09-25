@@ -102,16 +102,24 @@ function UpdateItemCard({
         </ul>
       )}
 
-      <label className="mt-3 flex cursor-pointer select-none items-center gap-2 border-t border-hud-border pt-2 font-mono text-[11px] uppercase tracking-wider text-slate-400">
-        <input
-          type="checkbox"
-          checked={autoUpdate}
-          onChange={() => onToggleAutoUpdate(item.id)}
-          className="h-3.5 w-3.5 cursor-pointer"
-          style={{ accentColor: accent }}
-        />
-        <span>Update automatically</span>
-      </label>
+      {affordances.autoUpdateSupported ? (
+        <label className="mt-3 flex cursor-pointer select-none items-center gap-2 border-t border-hud-border pt-2 font-mono text-[11px] uppercase tracking-wider text-slate-400">
+          <input
+            type="checkbox"
+            checked={autoUpdate}
+            onChange={() => onToggleAutoUpdate(item.id)}
+            className="h-3.5 w-3.5 cursor-pointer"
+            style={{ accentColor: accent }}
+          />
+          <span>Update automatically</span>
+        </label>
+      ) : (
+        // Nothing sysupdate runs could ever upgrade this item, so a checkbox
+        // here would tick, persist, and silently never fire. Say why instead.
+        <p className="mt-3 border-t border-hud-border pt-2 font-mono text-[11px] text-slate-600">
+          {affordances.autoUpdateNote}
+        </p>
+      )}
     </div>
   );
 }

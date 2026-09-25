@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { toCardAffordances, DEFAULT_BLOCKED_REMEDIATION } from './updateCard';
+import { toCardAffordances, DEFAULT_BLOCKED_REMEDIATION,
+  SELF_MANAGED_AUTO_UPDATE_NOTE,
+  NO_SNIPPET_AUTO_UPDATE_NOTE,
+} from './updateCard';
 
 describe('toCardAffordances', () => {
   it('offers Upgrade for a ready item with a snippet', () => {
@@ -100,5 +103,49 @@ describe('toCardAffordances', () => {
     for (const status of ['ready', 'failed', 'up_to_date', 'updating', 'self_managed'] as const) {
       expect(toCardAffordances({ status, snippetId: 'firefox', remediation: 'ignored' }).remediation).toBeNull();
     }
+  });
+
+  describe('auto-update availability', () => {
+    it('offers auto-update on an up-to-date item — the tick fires on a later scan', () => {
+      expect(toCardAffordances({ status: 'up_to_date', snippetId: 'firefox' })).toMatchObject({
+        actionEnabled: false,
+        autoUpdateSupported: true,
+        autoUpdateNote: null,
+      });
+    });
+
+    it('offers auto-update on a blocked item — the host fix makes it runnable', () => {
+      expect(toCardAffordances({ status: 'blocked', snippetId: 'pip' })).toMatchObject({
+        actionEnabled: false,
+        autoUpdateSupported: true,
+      });
+    });
+
+    it('offers auto-update on ready, failed and updating items with a snippet', () => {
+      for (const status of ['ready', 'failed', 'updating'] as const) {
+        expect(toCardAffordances({ status, snippetId: 'firefox' })).toMatchObject({
+          autoUpdateSupported: true,
+          autoUpdateNote: null,
+        });
+      }
+    });
+
+    it('withholds auto-update from a self-managed item, even with a snippet', () => {
+      expect(
+        toCardAffordances({ status: 'self_managed', snippetId: 'android-studio' }),
+      ).toMatchObject({
+        autoUpdateSupported: false,
+        autoUpdateNote: SELF_MANAGED_AUTO_UPDATE_NOTE,
+      });
+    });
+
+    it('withholds auto-update when there is no snippet to run', () => {
+      for (const status of ['ready', 'failed', 'up_to_date', 'updating'] as const) {
+        expect(toCardAffordances({ status })).toMatchObject({
+          autoUpdateSupported: false,
+          autoUpdateNote: NO_SNIPPET_AUTO_UPDATE_NOTE,
+        });
+      }
+    });
   });
 });

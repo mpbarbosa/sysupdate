@@ -15,6 +15,13 @@ if [ -z "$BLUE" ]; then
     source "$SCRIPT_DIR/core_lib.sh"
 fi
 
+# The `# SNIPPET_ID:` header of $1, or empty when the file declares none.
+# Read in two places — the --snippet filter and the id tag on every summary the
+# snippet emits — so it lives in one function.
+read_snippet_id() {
+    grep -m1 '^# SNIPPET_ID:' "$1" 2>/dev/null | sed 's/^# SNIPPET_ID: *//'
+}
+
 source_upgrade_snippets() {
     # Load upgrade snippets from ../upgrade_snippets if present.
     # When SNIPPET_ID_FILTER is set, only the snippet with matching ID is sourced.
@@ -24,7 +31,7 @@ source_upgrade_snippets() {
             [ -r "$_f" ] || continue
             if [ -n "${SNIPPET_ID_FILTER:-}" ]; then
                 local _id
-                _id=$(grep -m1 '^# SNIPPET_ID:' "$_f" 2>/dev/null | sed 's/^# SNIPPET_ID: *//')
+                _id=$(read_snippet_id "$_f")
                 [ "$_id" = "$SNIPPET_ID_FILTER" ] || continue
             fi
             source_snippet_isolated "$_f"
@@ -51,8 +58,16 @@ source_snippet_isolated() {
     local saved_pipefail
     saved_pipefail=$(set -o | awk '$1 == "pipefail" { print $2 }')
 
+    # Tag every summary the snippet emits with its own id (emit_summary_event
+    # reads this), and put back whatever was there — snippets are sourced into
+    # the orchestrator's shell, so a leaked id would mislabel later events.
+    local previous_snippet_id="${SYSUPDATE_CURRENT_SNIPPET_ID:-}"
+    SYSUPDATE_CURRENT_SNIPPET_ID="$(read_snippet_id "$snippet_file")"
+
     source "$snippet_file"
     local source_status=$?
+
+    SYSUPDATE_CURRENT_SNIPPET_ID="$previous_snippet_id"
 
     case "$saved_flags" in *e*) set -e ;; *) set +e ;; esac
     case "$saved_flags" in *u*) set -u ;; *) set +u ;; esac

@@ -46,6 +46,14 @@ Additional fields are added per event type. The `summary.updates` event adds
 `summary_name`, `target`, `status`, `current_version`, `latest_version`, and —
 for a status the snippet cannot resolve on its own — an optional `remediation`
 string naming the host-side fix (see rule 1).
+
+It also adds `snippet_id` whenever the event came from a snippet: consumers
+need it to re-run exactly that one (`--snippet <id>`). Snippets do not pass it
+themselves — `source_snippet_isolated` sets `SYSUPDATE_CURRENT_SNIPPET_ID` from
+each file's own `# SNIPPET_ID:` header and `emit_summary_event` attaches it, so
+a new snippet gets it for free. Summaries emitted from `lib/` modules (the
+package-manager inventories) run outside a snippet, so the field is absent
+there.
 The `terminal.line` event adds `line_type` and `message`.
 
 ## Emitting events in Bash

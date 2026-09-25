@@ -52,3 +52,31 @@ SYSUPDATE="$REPO_ROOT/scripts/system_update.sh"
     run bash -c "SYSUPDATE_SNIPPETS_DIR='$FIXTURE_SNIPPETS' '$SYSUPDATE' --snippet fixture-current --check-only 2>/dev/null"
     [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# summary events carry the producing snippet's id
+# ---------------------------------------------------------------------------
+#
+# Consumers need the id to re-run exactly one snippet (`--snippet <id>`). No
+# snippet passes it: source_snippet_isolated sets SYSUPDATE_CURRENT_SNIPPET_ID
+# from each file's own `# SNIPPET_ID:` header, and emit_summary_event attaches
+# it. The fixtures below never mention snippet_id, which is the point.
+
+@test "version_check summaries carry the snippet id that produced them" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FIXTURE_SNIPPETS' '$SYSUPDATE' --check-only --json-events -q 2>&1 1>/dev/null"
+    echo "$output" | grep -q '"snippet_id":"fixture-outdated","target":"Fixture Outdated"'
+    echo "$output" | grep -q '"snippet_id":"fixture-current","target":"Fixture Current"'
+}
+
+@test "each summary carries its own snippet id, not the previously sourced one" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FIXTURE_SNIPPETS' '$SYSUPDATE' --check-only --json-events -q 2>&1 1>/dev/null"
+    # Snippets are sourced into the orchestrator's own shell, so a leaked id
+    # would tag every later snippet's summary with the first one's id.
+    [[ "$output" != *'"snippet_id":"fixture-blocked","target":"Fixture Current"'* ]]
+    [[ "$output" != *'"snippet_id":"fixture-current","target":"Fixture Outdated"'* ]]
+}
+
+@test "a filtered run tags the summary with the filtered snippet id" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FIXTURE_SNIPPETS' '$SYSUPDATE' --snippet fixture-outdated --check-only --json-events 2>&1 1>/dev/null"
+    echo "$output" | grep -q '"snippet_id":"fixture-outdated"'
+}

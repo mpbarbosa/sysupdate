@@ -135,9 +135,27 @@ emit_terminal_event() {
     emit_event "terminal.line" "line_type" "$line_type" "message" "$message"
 }
 
+# A summary event, tagged with the snippet that produced it.
+#
+# Snippets never pass their own id: source_snippet_isolated sets
+# SYSUPDATE_CURRENT_SNIPPET_ID from the file's own `# SNIPPET_ID:` header for
+# the duration of the snippet, so every snippet carries it without a
+# per-snippet change. Consumers need it to re-run exactly one snippet
+# (`--snippet <id>`); without it the web dashboard could only act on a
+# hardcoded handful of targets and every other card's button was inert.
+#
+# Package-manager summaries emitted from lib/ modules run outside a snippet, so
+# the variable is empty there and the field is simply absent.
 emit_summary_event() {
     local summary_name="$1"
     shift
+
+    if [ -n "${SYSUPDATE_CURRENT_SNIPPET_ID:-}" ]; then
+        emit_event "summary.updates" "summary_name" "$summary_name" \
+            "snippet_id" "$SYSUPDATE_CURRENT_SNIPPET_ID" "$@"
+        return
+    fi
+
     emit_event "summary.updates" "summary_name" "$summary_name" "$@"
 }
 
