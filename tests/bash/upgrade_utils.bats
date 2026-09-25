@@ -961,3 +961,169 @@ stub_vscode_dpkg_version() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"did not reach the expected version"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# android-studio: the installed build is compared against Google's feed
+# ---------------------------------------------------------------------------
+#
+# The snippet used to report `self_managed` unconditionally with no latest
+# version, on the premise that Google publishes no machine-readable feed. It
+# does — updates.xml, the one the IDE's own updater polls — so a build a full
+# release behind rendered on the dashboard as an INFO card with nothing to
+# compare. These tests run the REAL snippet against a stubbed curl and a
+# stubbed /opt install.
+
+source_android_studio_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/as/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/as/lib"
+    # Drop the trailing invocation so the functions can be sourced on their own.
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_android_studio.sh" \
+        > "$snippets_dir/update_android_studio.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_android_studio.sh"
+}
+
+# A feed shaped like the real one: the newest release build is NOT first, a
+# canary channel carries a higher number, and one release build number is
+# malformed.
+write_android_studio_feed() {
+    cat > "$BATS_TEST_TMPDIR/updates.xml" <<'XML'
+<?xml version='1.0' encoding='ASCII'?>
+<products>
+  <product name="Android Studio">
+    <code>AI</code>
+    <channel id="AI-1-release" majorVersion="1" name="Android Studio updates" status="release">
+      <build apiVersion="AI-261.26222.65" number="AI-261.26222.65.2613.15948027" version="Quail 3">
+        <message><![CDATA[<html>number="AI-999.999.999.999.999999999" in prose</html>]]></message>
+      </build>
+      <build apiVersion="AI-261.26222.65" number="AI-261.26222.65.2614.16379836" version="Quail 4 Patch 1"/>
+      <build apiVersion="AI-261.26222.65" number="AI-truncated" version="Malformed"/>
+    </channel>
+    <channel id="AI-1-canary" majorVersion="1" name="Android Studio canary" status="eap">
+      <build apiVersion="AI-262.10315.125" number="AI-262.10315.125.2622.16434108" version="Rabbit 2 Canary 2"/>
+    </channel>
+  </product>
+</products>
+XML
+    export ANDROID_STUDIO_UPDATES_URL="$BATS_TEST_TMPDIR/updates.xml"
+}
+
+# Fake curl that serves the fixture feed, or fails like a network miss.
+stub_android_studio_curl() {
+    local stubdir="$BATS_TEST_TMPDIR/asbin"
+    mkdir -p "$stubdir"
+    cat > "$stubdir/curl" <<'STUB'
+#!/bin/sh
+[ "${STUB_AS_CURL_FAILS:-false}" = true ] && exit 22
+cat "$ANDROID_STUDIO_UPDATES_URL"
+STUB
+    chmod +x "$stubdir/curl"
+    export PATH="$stubdir:$PATH"
+}
+
+# A /opt/android-studio whose product-info.json reports build $1.
+install_fake_android_studio() {
+    local home="$BATS_TEST_TMPDIR/android-studio"
+    mkdir -p "$home"
+    printf '{\n  "name": "Android Studio",\n  "version": "%s",\n  "productCode": "AI"\n}\n' "$1" \
+        > "$home/product-info.json"
+    export ANDROID_STUDIO_HOME="$home"
+}
+
+@test "android-studio: latest build comes from the release channel, not canary" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    source_android_studio_functions
+    run get_android_studio_latest_build
+    [ "$status" -eq 0 ]
+    # The canary build (262.x) is higher but belongs to another channel.
+    [ "$output" = "AI-261.26222.65.2614.16379836" ]
+}
+
+@test "android-studio: the highest build wins regardless of feed order" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    source_android_studio_functions
+    run extract_android_studio_channel_builds release < "$BATS_TEST_TMPDIR/updates.xml"
+    [ "$status" -eq 0 ]
+    # Listed second in the feed, and it must still be the one selected above.
+    [[ "$output" == *"AI-261.26222.65.2614.16379836"* ]]
+    # Prose inside <message> is not a build element.
+    [[ "$output" != *"AI-999.999.999.999.999999999"* ]]
+}
+
+@test "android-studio: a malformed build number cannot become the latest" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    source_android_studio_functions
+    run get_android_studio_latest_build
+    [ "$output" != "AI-truncated" ]
+    [[ "$output" =~ ^AI-[0-9]+(\.[0-9]+)+$ ]]
+}
+
+@test "android-studio: a newer build reports self_managed with both versions" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    install_fake_android_studio "AI-251.25410.109.2511.13752376"
+    source_android_studio_functions
+    export QUIET_MODE=true
+    enable_json_events
+    run update_android_studio
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"self_managed"'* ]]
+    [[ "$output" == *'"current_version":"AI-251.25410.109.2511.13752376"'* ]]
+    # The whole point of the change: a real latest, not "unknown".
+    [[ "$output" == *'"latest_version":"AI-261.26222.65.2614.16379836"'* ]]
+}
+
+@test "android-studio: an installed build at the channel head reports up_to_date" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    install_fake_android_studio "AI-261.26222.65.2614.16379836"
+    source_android_studio_functions
+    export QUIET_MODE=true
+    enable_json_events
+    run update_android_studio
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"up_to_date"'* ]]
+    [[ "$output" != *'"status":"self_managed"'* ]]
+}
+
+@test "android-studio: a build ahead of the channel is not reported as behind" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    # Someone running canary is ahead of the stable channel, not behind it.
+    install_fake_android_studio "AI-262.10315.125.2622.16434108"
+    source_android_studio_functions
+    export QUIET_MODE=true
+    enable_json_events
+    run update_android_studio
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"up_to_date"'* ]]
+}
+
+@test "android-studio: an unreachable feed reports unknown, not a verdict" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    install_fake_android_studio "AI-251.25410.109.2511.13752376"
+    source_android_studio_functions
+    export QUIET_MODE=true STUB_AS_CURL_FAILS=true
+    enable_json_events
+    run update_android_studio
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"unknown"'* ]]
+    [[ "$output" == *'"latest_version":"unknown"'* ]]
+}
+
+@test "android-studio: a missing install still reports not_installed" {
+    write_android_studio_feed
+    stub_android_studio_curl
+    export ANDROID_STUDIO_HOME="$BATS_TEST_TMPDIR/absent"
+    source_android_studio_functions
+    export QUIET_MODE=true
+    enable_json_events
+    run update_android_studio
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"not_installed"'* ]]
+}

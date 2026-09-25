@@ -41,17 +41,44 @@ describe('toCardAffordances', () => {
     );
   });
 
-  it('hides the version transition for up-to-date and self-managed items', () => {
+  it('hides the version transition for up-to-date items', () => {
     expect(toCardAffordances({ status: 'up_to_date', snippetId: 'firefox' })).toMatchObject({
       actionLabel: 'Up to Date',
       actionEnabled: false,
       showVersions: false,
     });
-    expect(toCardAffordances({ status: 'self_managed', snippetId: 'android-studio' })).toMatchObject({
+  });
+
+  it('shows the transition for a self-managed item that resolved a newer build', () => {
+    expect(
+      toCardAffordances({
+        status: 'self_managed',
+        snippetId: 'android-studio',
+        currentVersion: 'AI-251.25410.109.2511.13752376',
+        latestVersion: 'AI-261.26222.65.2614.16379836',
+      }),
+    ).toMatchObject({
       actionLabel: 'Self-Update',
       actionEnabled: false,
-      showVersions: false,
+      showVersions: true,
     });
+  });
+
+  it('hides the transition for a self-managed item with no usable latest', () => {
+    for (const latestVersion of [undefined, '', 'unknown', 'AI-251.25410.109.2511.13752376']) {
+      expect(
+        toCardAffordances({
+          status: 'self_managed',
+          snippetId: 'android-studio',
+          currentVersion: 'AI-251.25410.109.2511.13752376',
+          latestVersion,
+        }),
+      ).toMatchObject({
+        actionLabel: 'Self-Update',
+        actionEnabled: false,
+        showVersions: false,
+      });
+    }
   });
 
   it('disables the button while an upgrade is running', () => {

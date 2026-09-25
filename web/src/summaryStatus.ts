@@ -22,9 +22,10 @@ export function toUpdateStatus(status: unknown): UpdateItem['status'] {
     case 'not_installed':
     case 'unknown':
       return 'failed';
-    // Self-managed tools (e.g. Android Studio) update through their own updater
-    // and expose no trackable "latest" — informational, not a failure, so they
-    // must not render as a red/RETRY card.
+    // Self-managed tools (e.g. Android Studio) apply their own updates, so
+    // sysupdate cannot act even when it knows a newer build exists — the
+    // snippet may still send a real `latest_version` alongside this status.
+    // Informational, not a failure: never a red/RETRY card.
     case 'self_managed':
       return 'self_managed';
     default:

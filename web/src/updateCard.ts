@@ -21,7 +21,8 @@ export interface CardAffordances {
 
 /** What the card for `item` may offer the user. */
 export function toCardAffordances(
-  item: Pick<UpdateItem, 'status' | 'snippetId' | 'remediation'>,
+  item: Pick<UpdateItem, 'status' | 'snippetId' | 'remediation'> &
+    Partial<Pick<UpdateItem, 'currentVersion' | 'latestVersion'>>,
 ): CardAffordances {
   // A blocked install is deterministic: the snippet re-runs, meets the same
   // broken state, and reports it again. A "Retry" button here invites the user
@@ -42,10 +43,13 @@ export function toCardAffordances(
     return base('Up to Date', 'muted', { showVersions: false });
   }
 
-  // Self-managed tools update through their own updater and expose no
-  // trackable "latest".
+  // Self-managed tools update through their own updater, so the button stays
+  // inert — but the snippet may still have resolved a real newer build (Android
+  // Studio reads Google's updates.xml). Show the transition when there is one:
+  // hiding it left a card that was a full release behind reading as an
+  // all-clear. Fall back to hiding it when no usable `latest` came through.
   if (item.status === 'self_managed') {
-    return base('Self-Update', 'muted', { showVersions: false });
+    return base('Self-Update', 'muted', { showVersions: hasRealLatest(item) });
   }
 
   if (item.status === 'updating') {
@@ -60,6 +64,14 @@ export function toCardAffordances(
   return item.status === 'failed'
     ? { ...base('Retry', 'danger'), actionEnabled: true }
     : { ...base('Upgrade', 'accent'), actionEnabled: true };
+}
+
+/** True when `latestVersion` names a build actually worth showing beside the current one. */
+function hasRealLatest(
+  item: Partial<Pick<UpdateItem, 'currentVersion' | 'latestVersion'>>,
+): boolean {
+  const latest = item.latestVersion?.trim();
+  return Boolean(latest) && latest !== 'unknown' && latest !== item.currentVersion?.trim();
 }
 
 function base(
