@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
   mapTerminalType,
+  classifyStderrLine,
   stripAnsi,
   trimArray,
   sanitizeSnippetId,
@@ -310,7 +311,7 @@ function processOutputLine(line, streamName, run = currentRun) {
     }
   }
 
-  addTerminalLine(cleaned, streamName === 'stderr' ? 'error' : 'output', streamName, run);
+  addTerminalLine(cleaned, streamName === 'stderr' ? classifyStderrLine(cleaned) : 'output', streamName, run);
   if (run === currentRun) {
     broadcast({
       type: `${streamName}.line`,

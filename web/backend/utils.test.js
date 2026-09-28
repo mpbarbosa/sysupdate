@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   mapTerminalType,
+  classifyStderrLine,
   stripAnsi,
   trimArray,
   sanitizeSnippetId,
@@ -48,6 +49,37 @@ describe('mapTerminalType', () => {
 
   it('maps empty string → output', () => {
     expect(mapTerminalType('')).toBe('output');
+  });
+});
+
+describe('classifyStderrLine', () => {
+  it.each([
+    "../../../readline/readline/tilde.c:195:14: error: 'x' undeclared",
+    'gcc: fatal error: no input files',
+    'make[2]: *** [Makefile:1234: gdb] Error 1',
+    'E: Unable to locate package libgmp-dev',
+    'fatal: not a git repository',
+    'bash: foo: command not found',
+  ])('flags real failures as error: %s', (line) => {
+    expect(classifyStderrLine(line)).toBe('error');
+  });
+
+  it.each([
+    '../../../readline/readline/tilde.c:195:14: warning: assignment discards ‘const’ qualifier',
+    'configure: WARNING: libipt is missing or unusable; some features may be unavailable.',
+    'W: Some index files failed to download.',
+  ])('flags diagnostics as warning: %s', (line) => {
+    expect(classifyStderrLine(line)).toBe('warning');
+  });
+
+  it.each([
+    '2026-09-27 21:53:12 URL:https://ftp.gnu.org/gnu/gdb/gdb-18.1.tar.xz [22158720/22158720] -> "gdb-18.1.tar.xz" [1]',
+    "ar: `u' modifier ignored since `D' is the default (see `U')",
+    "  195 |   if (result = strchr (string, '~'))",
+    '../../../readline/readline/tilde.c: In function ‘tilde_expand’:',
+    'CFLAGS += -Werror',
+  ])('dims ordinary tool chatter: %s', (line) => {
+    expect(classifyStderrLine(line)).toBe('dim');
   });
 });
 

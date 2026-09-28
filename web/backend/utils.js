@@ -24,6 +24,25 @@ export function mapTerminalType(lineType) {
   }
 }
 
+// Raw (non-JSON) stderr from the child is mostly tool chatter, not failures:
+// compilers, configure, make and wget all log progress and diagnostics there.
+// Only lines that look like a real error or warning get those tones; the rest
+// are dimmed so they stay readable without masquerading as failures. The CLI's
+// own status lines arrive as terminal.line events and never pass through here.
+const STDERR_ERROR_RE =
+  /(^|[\s:])(fatal )?error:|^E:\s|\bfatal:|\*\*\* .*\bError \d+|\b(command not found|No such file or directory|Permission denied)\b/i;
+const STDERR_WARNING_RE = /(^|[\s:])warning:|^W:\s/i;
+
+export function classifyStderrLine(text) {
+  if (STDERR_ERROR_RE.test(text)) {
+    return 'error';
+  }
+  if (STDERR_WARNING_RE.test(text)) {
+    return 'warning';
+  }
+  return 'dim';
+}
+
 export function stripAnsi(text) {
   return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
