@@ -34,6 +34,9 @@ const MAX_RAW_EVENTS = 1200;
 // they carry no signal and would flood the terminal buffer and event stream.
 // Snippets prefer -nv when non-interactive (download_with_progress); this is a
 // defense-in-depth net for any tool that still emits progress dots.
+// Raw output lines can arrive by the thousand (a source build relays make's
+// progress), so their snapshots are coalesced to at most one per interval.
+const OUTPUT_SNAPSHOT_INTERVAL_MS = 100;
 const PROGRESS_LINE_RE = /^\s*\d+[KMG][ .]+\d+%/;
 const LOG_FILE =
   process.env.SYSUPDATE_LOG_FILE ??
@@ -85,6 +88,8 @@ function createRunState(args) {
     // The dashboard-facing view of the latest sudo prompt (never the password).
     sudoPrompt: null,
     terminalLines: [],
+    // Monotonic, so line ids stay unique after the buffer starts trimming.
+    terminalLineCount: 0,
     rawEvents: [],
     summariesByKey: {},
     // In-memory only, wiped when the child exits. `answeredPids` records which
@@ -167,12 +172,29 @@ function broadcast(message) {
   }
 }
 
+let pendingOutputSnapshot = null;
+
 function broadcastSnapshot(reason) {
+  // A full snapshot carries every buffered line, so it supersedes a pending one.
+  if (pendingOutputSnapshot) {
+    clearTimeout(pendingOutputSnapshot);
+    pendingOutputSnapshot = null;
+  }
   broadcast({
     type: 'snapshot',
     reason,
     payload: getRunSnapshot(),
   });
+}
+
+function scheduleOutputSnapshot(reason) {
+  if (pendingOutputSnapshot) {
+    return;
+  }
+  pendingOutputSnapshot = setTimeout(() => {
+    pendingOutputSnapshot = null;
+    broadcastSnapshot(reason);
+  }, OUTPUT_SNAPSHOT_INTERVAL_MS);
 }
 
 // All output/lifecycle writes are bound to the run that produced them (`run`),
@@ -189,7 +211,7 @@ function addTerminalLine(text, type, source = 'bridge', run = currentRun) {
     [
       ...run.terminalLines,
       {
-        id: `${run.id}-line-${run.terminalLines.length + 1}`,
+        id: `${run.id}-line-${(run.terminalLineCount += 1)}`,
         text,
         type,
         source,
@@ -317,7 +339,7 @@ function processOutputLine(line, streamName, run = currentRun) {
       type: `${streamName}.line`,
       payload: { text: cleaned },
     });
-    broadcastSnapshot(`${streamName}.line`);
+    scheduleOutputSnapshot(`${streamName}.line`);
   }
 }
 

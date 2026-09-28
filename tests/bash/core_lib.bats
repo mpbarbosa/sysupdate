@@ -3,6 +3,8 @@
 # Tests for scripts/lib/core_lib.sh
 # Covers: normalize_version_for_comparison, compare_versions
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     # These suites assert the headless code paths — the ones guarded by
@@ -364,4 +366,30 @@ emit_summary_line() {
     [ "$status" -eq 0 ]
     [[ "$output" == *'"snippet_id":"firefox"'* ]]
     [[ "$output" == *'"target":"snippet_id"'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# run_with_visible_output
+# ---------------------------------------------------------------------------
+
+@test "run_with_visible_output: stdout stays on stdout without JSON events" {
+    SYSUPDATE_JSON_EVENTS=false
+    run --separate-stderr run_with_visible_output echo "CXX gdb.o"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CXX gdb.o" ]
+    [ -z "$stderr" ]
+}
+
+@test "run_with_visible_output: stdout moves to stderr under JSON events" {
+    SYSUPDATE_JSON_EVENTS=true
+    run --separate-stderr run_with_visible_output echo "CXX gdb.o"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$stderr" = "CXX gdb.o" ]
+}
+
+@test "run_with_visible_output: returns the tool's own exit status" {
+    SYSUPDATE_JSON_EVENTS=true
+    run run_with_visible_output sh -c 'exit 3'
+    [ "$status" -eq 3 ]
 }

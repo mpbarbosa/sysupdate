@@ -253,7 +253,7 @@ build_gdb_from_source() {
   local configure_opts
   configure_opts=$(get_config "build_instructions.configure_options.default")
   
-  if ! ../configure $configure_opts; then
+  if ! run_with_visible_output ../configure $configure_opts; then
     local configure_failed
     configure_failed=$(get_config "messages.build.configure_failed")
     print_error "$configure_failed"
@@ -269,7 +269,7 @@ build_gdb_from_source() {
   local num_cores
   num_cores=$(nproc 2>/dev/null || echo 2)
   
-  if ! make -j"$num_cores"; then
+  if ! run_with_visible_output make -j"$num_cores"; then
     local make_failed
     make_failed=$(get_config "messages.build.make_failed")
     print_error "$make_failed"
@@ -282,7 +282,7 @@ build_gdb_from_source() {
   installing_msg=$(get_config "messages.build.installing")
   print_status "$installing_msg"
   
-  if ! sudo make install; then
+  if ! run_with_visible_output sudo make install; then
     local install_failed
     install_failed=$(get_config "messages.build.install_failed")
     print_error "$install_failed"

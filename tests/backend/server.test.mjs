@@ -253,6 +253,24 @@ const answerSudo = (body) =>
 
 const messages = (run) => run.terminalLines.map((line) => line.text);
 
+describe('raw output flood', { concurrency: false }, () => {
+  it('keeps line ids unique once the terminal buffer starts trimming', async () => {
+    const start = await fetch(`${BASE}/api/runs/check-only`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snippetId: 'flood' }),
+    });
+    assert.strictEqual(start.status, 202);
+
+    const run = await waitForFinished();
+    const raw = run.terminalLines.filter((line) => line.text.startsWith('build-line-'));
+    assert.strictEqual(raw.at(-1).text, 'build-line-700');
+    assert.ok(raw.every((line) => line.type === 'dim'), 'plain tool output should be dimmed');
+    const ids = run.terminalLines.map((line) => line.id);
+    assert.strictEqual(new Set(ids).size, ids.length, 'line ids must be unique');
+  });
+});
+
 describe('sudo askpass relay', { concurrency: false }, () => {
   it('advertises sudo-askpass support on a loopback bind', async () => {
     const res = await fetch(`${BASE}/api/bootstrap`);

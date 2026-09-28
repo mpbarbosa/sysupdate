@@ -240,6 +240,20 @@ emit_log_event() {
 # UTILITY FUNCTIONS FOR FORMATTED OUTPUT
 #=============================================================================
 
+# Run a long tool (configure, make, ...) so its progress reaches event consumers.
+#
+# In --json-events mode the web bridge ignores stdout, because every print_*
+# line is duplicated there as a terminal.line event. A tool's own progress goes
+# to stdout and would be lost, so route it to stderr, where the bridge relays
+# raw lines. Exit status is the tool's own.
+run_with_visible_output() {
+    if [ "$SYSUPDATE_JSON_EVENTS" = true ]; then
+        "$@" >&2
+    else
+        "$@"
+    fi
+}
+
 print_operation_header() {
     echo -e "\n${BLUE}\033[1m$1\033[0m"
     emit_terminal_event "operation_header" "$1"

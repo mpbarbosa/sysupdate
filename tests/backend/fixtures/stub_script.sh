@@ -49,6 +49,14 @@ if [[ " $* " == *" --snippet sudo-cancel "* ]]; then
   rm -rf "$tmp"
 fi
 
+# Floods raw (non-JSON) stderr past the bridge's terminal buffer, the way a
+# source build relays make's progress.
+if [[ " $* " == *" --snippet flood "* ]]; then
+  for i in $(seq 1 700); do
+    echo "build-line-$i" >&2
+  done
+fi
+
 echo '{"event_type":"run.completed","exit_code":0,"timestamp":"2026-01-01T00:00:00.003Z","sequence":4,"pid":12345,"run_id":"stub-run-001","module":"stub","function":"main","source":"stub:main"}' >&2
 
 exit 0
