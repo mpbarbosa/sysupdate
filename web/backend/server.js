@@ -49,6 +49,9 @@ const LOG_FILE =
 const SUDO_RELAY_ENABLED = isLoopbackHost(HOST) && process.env.SYSUPDATE_SUDO_RELAY !== 'false';
 const ASKPASS_HELPER_SCRIPT = path.join(__dirname, 'sudo_askpass.mjs');
 const SUDO_REQUEST_MAX_BYTES = 4096;
+// How long a stopped run gets to exit on SIGTERM before the bridge escalates
+// to SIGKILL. apt/dpkg block signals mid-transaction, so the grace is generous.
+const STOP_GRACE_MS = Number(process.env.SYSUPDATE_STOP_GRACE_MS ?? '5000');
 
 const clients = new Set();
 const snippetIdByModule = new Map();
@@ -56,6 +59,9 @@ const snippetIdByModule = new Map();
 let activeChild = null;
 let currentRun = null;
 let shuttingDown = false;
+// Pending SIGTERM -> SIGKILL escalation for a stop request; cleared when the
+// child closes so a later run never inherits an armed timer.
+let stopEscalationTimer = null;
 // { dir, socketPath, helperPath, server } once listening; null when disabled.
 let askpassRelay = null;
 
@@ -87,6 +93,13 @@ function createRunState(args) {
     lastLogEntry: null,
     // The dashboard-facing view of the latest sudo prompt (never the password).
     sudoPrompt: null,
+    // Set by POST /api/runs/stop so the close handler reports 'stopped'
+    // instead of the 'failed' a SIGTERM exit code would otherwise imply.
+    stopRequested: false,
+    // The status to restore on resume ('starting' or 'running'), so a pause
+    // during startup does not silently promote the run to 'running'.
+    statusBeforePause: null,
+    pausedAt: null,
     terminalLines: [],
     // Monotonic, so line ids stay unique after the buffer starts trimming.
     terminalLineCount: 0,
@@ -105,7 +118,137 @@ function createRunState(args) {
 }
 
 function isRunActive(run) {
-  return run !== null && (run.status === 'starting' || run.status === 'running');
+  return run !== null && (run.status === 'starting' || run.status === 'running' || run.status === 'paused');
+}
+
+// The CLI is a Bash orchestrator: the work actually happens in apt, sudo, make
+// and curl children. Signalling the Bash pid alone would leave those running,
+// so the child is spawned detached (it leads its own process group) and every
+// control signal addresses the negative pid, i.e. the whole tree.
+function signalRunTree(child, signal) {
+  if (!child?.pid) {
+    return false;
+  }
+
+  try {
+    process.kill(-child.pid, signal);
+    return true;
+  } catch {
+    // The group is gone, or this child never led one. Signalling the process
+    // directly is the best remaining effort; report failure if that also fails.
+    try {
+      child.kill(signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function clearStopEscalation() {
+  if (stopEscalationTimer) {
+    clearTimeout(stopEscalationTimer);
+    stopEscalationTimer = null;
+  }
+}
+
+// SIGSTOP freezes the whole tree where it stands. Nothing is rolled back and no
+// state is lost: a half-written apt transaction simply waits. Network transfers
+// can still time out on the server side, which is why the dashboard warns.
+function pauseRun() {
+  if (!activeChild || !isRunActive(currentRun)) {
+    return { ok: false, statusCode: 409, error: 'No sysupdate run is in progress.' };
+  }
+
+  if (currentRun.status === 'paused') {
+    return { ok: true, statusCode: 200, payload: getRunSnapshot() };
+  }
+
+  if (!signalRunTree(activeChild, 'SIGSTOP')) {
+    return { ok: false, statusCode: 500, error: 'Could not suspend the sysupdate process group.' };
+  }
+
+  currentRun.statusBeforePause = currentRun.status;
+  currentRun.status = 'paused';
+  currentRun.pausedAt = new Date().toISOString();
+  addTerminalLine('Run paused — the sysupdate process tree is suspended (SIGSTOP).', 'warning', 'bridge', currentRun);
+  broadcastSnapshot('run.paused');
+
+  return { ok: true, statusCode: 202, payload: getRunSnapshot() };
+}
+
+function resumeRun() {
+  if (!activeChild || !isRunActive(currentRun)) {
+    return { ok: false, statusCode: 409, error: 'No sysupdate run is in progress.' };
+  }
+
+  if (currentRun.status !== 'paused') {
+    return { ok: true, statusCode: 200, payload: getRunSnapshot() };
+  }
+
+  if (!signalRunTree(activeChild, 'SIGCONT')) {
+    return { ok: false, statusCode: 500, error: 'Could not resume the sysupdate process group.' };
+  }
+
+  currentRun.status = currentRun.statusBeforePause ?? 'running';
+  currentRun.statusBeforePause = null;
+  currentRun.pausedAt = null;
+  addTerminalLine('Run resumed (SIGCONT).', 'info', 'bridge', currentRun);
+  broadcastSnapshot('run.resumed');
+
+  return { ok: true, statusCode: 202, payload: getRunSnapshot() };
+}
+
+// Graceful first: SIGTERM lets the CLI's traps run and lets apt finish the
+// dpkg call it is inside. SIGKILL only after STOP_GRACE_MS, because killing a
+// package manager outright is what leaves dpkg needing --configure -a.
+function stopRun() {
+  if (!activeChild || !isRunActive(currentRun)) {
+    return { ok: false, statusCode: 409, error: 'No sysupdate run is in progress.' };
+  }
+
+  const child = activeChild;
+  const run = currentRun;
+  run.stopRequested = true;
+
+  // A suspended process cannot act on SIGTERM — wake it first or the stop
+  // would silently do nothing until the grace period expires.
+  if (run.status === 'paused') {
+    signalRunTree(child, 'SIGCONT');
+    run.status = run.statusBeforePause ?? 'running';
+    run.statusBeforePause = null;
+    run.pausedAt = null;
+  }
+
+  // Unblock anything waiting on the dashboard for a sudo password, so the CLI
+  // can fail that step and exit instead of sitting inside sudo past the grace.
+  clearSudoState(run);
+
+  if (!signalRunTree(child, 'SIGTERM')) {
+    return { ok: false, statusCode: 500, error: 'Could not signal the sysupdate process group.' };
+  }
+
+  addTerminalLine('Stop requested — sending SIGTERM to the sysupdate process tree.', 'warning', 'bridge', run);
+  broadcastSnapshot('run.stopping');
+
+  clearStopEscalation();
+  stopEscalationTimer = setTimeout(() => {
+    stopEscalationTimer = null;
+    if (activeChild !== child) {
+      return;
+    }
+    addTerminalLine(
+      `No exit ${STOP_GRACE_MS}ms after SIGTERM — sending SIGKILL. A package manager interrupted here may need repair.`,
+      'error',
+      'bridge',
+      run,
+    );
+    signalRunTree(child, 'SIGKILL');
+    broadcastSnapshot('run.killed');
+  }, STOP_GRACE_MS);
+  stopEscalationTimer.unref?.();
+
+  return { ok: true, statusCode: 202, payload: getRunSnapshot() };
 }
 
 function resolveSnippetIdFromModule(moduleName) {
@@ -157,6 +300,7 @@ function getRunSnapshot() {
     prompt: currentRun.prompt,
     lastLogEntry: currentRun.lastLogEntry,
     sudoPrompt: currentRun.sudoPrompt,
+    pausedAt: currentRun.pausedAt,
     terminalLines: currentRun.terminalLines,
     summaries: Object.values(currentRun.summariesByKey),
   };
@@ -574,6 +718,10 @@ function startRun(options = {}) {
 
   const child = spawn(SCRIPT_PATH, args, {
     cwd: REPO_ROOT,
+    // Own process group, so pause/resume/stop can signal the CLI's children
+    // (sudo, apt, make) and not just the Bash orchestrator. The bridge's own
+    // SIGINT/SIGTERM handlers call shutdown(), which signals the group back.
+    detached: true,
     env: {
       ...process.env,
       SYSUPDATE_JSON_EVENTS: 'true',
@@ -596,6 +744,7 @@ function startRun(options = {}) {
     addTerminalLine(`Failed to start sysupdate: ${error.message}`, 'error', 'bridge', run);
     // Only clear the shared child handle if this run still owns it.
     if (activeChild === child) {
+      clearStopEscalation();
       activeChild = null;
     }
     cleanupPromptInput();
@@ -609,7 +758,17 @@ function startRun(options = {}) {
   });
 
   child.on('close', (code) => {
-    if (run.status === 'running' || run.status === 'starting') {
+    if (activeChild === child) {
+      clearStopEscalation();
+    }
+
+    // A SIGTERM exit looks like a failure; when the dashboard asked for it,
+    // report it as 'stopped' so the UI does not offer a retry for a choice.
+    if (run.stopRequested) {
+      run.status = 'stopped';
+      run.completedAt = run.completedAt ?? new Date().toISOString();
+      run.exitCode = code ?? null;
+    } else if (run.status === 'running' || run.status === 'starting' || run.status === 'paused') {
       run.status = code === 0 ? 'completed' : 'failed';
       run.completedAt = new Date().toISOString();
       run.exitCode = code ?? 1;
@@ -734,6 +893,8 @@ const server = createServer(async (request, response) => {
             'snippet-upgrade-run',
             'json-events',
             'run-history',
+            'run-stop',
+            'run-pause',
             'shutdown',
             ...(SUDO_RELAY_ENABLED ? ['sudo-askpass'] : []),
           ],
@@ -773,6 +934,41 @@ const server = createServer(async (request, response) => {
       }
 
       const result = startUpgradeRun({ snippetId });
+      if (!result.ok) {
+        sendJson(response, result.statusCode, { error: result.error });
+        return;
+      }
+
+      sendJson(response, result.statusCode, { run: result.payload });
+      return;
+    }
+
+    // Run controls. Separate pause/resume routes rather than one toggle: two
+    // dashboards clicking at once must not flip the run back and forth.
+    if (request.method === 'POST' && requestUrl.pathname === '/api/runs/pause') {
+      const result = pauseRun();
+      if (!result.ok) {
+        sendJson(response, result.statusCode, { error: result.error });
+        return;
+      }
+
+      sendJson(response, result.statusCode, { run: result.payload });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/runs/resume') {
+      const result = resumeRun();
+      if (!result.ok) {
+        sendJson(response, result.statusCode, { error: result.error });
+        return;
+      }
+
+      sendJson(response, result.statusCode, { run: result.payload });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/runs/stop') {
+      const result = stopRun();
       if (!result.ok) {
         sendJson(response, result.statusCode, { error: result.error });
         return;
@@ -899,8 +1095,13 @@ function shutdown(reason = 'requested') {
   clearSudoState(currentRun);
   stopAskpassRelay();
 
+  clearStopEscalation();
   if (activeChild?.pid) {
-    activeChild.kill('SIGTERM');
+    // A paused tree would never see the SIGTERM; wake it first.
+    if (currentRun?.status === 'paused') {
+      signalRunTree(activeChild, 'SIGCONT');
+    }
+    signalRunTree(activeChild, 'SIGTERM');
   }
 
   for (const client of clients) {
