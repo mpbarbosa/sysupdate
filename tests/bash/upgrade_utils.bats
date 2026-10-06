@@ -520,6 +520,70 @@ SOURCES
     [ "$status" -ne 0 ]
 }
 
+# ---------------------------------------------------------------------------
+# apt_package_is_repo_served
+#
+# Answers "could apt itself upgrade this package?" - the question a snippet
+# must settle before treating the apt candidate as the latest version.
+# ---------------------------------------------------------------------------
+
+# Stub `apt-cache policy` with a canned version table.
+stub_apt_cache_policy() {
+    export STUB_APT_POLICY="$1"
+    apt-cache() { printf '%s\n' "$STUB_APT_POLICY"; }
+    export -f apt-cache
+}
+
+@test "apt_package_is_repo_served: true when a repository serves the package" {
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    run apt_package_is_repo_served "claude-desktop"
+    [ "$status" -eq 0 ]
+}
+
+# A package installed from a hand-downloaded .deb still gets a Candidate - its
+# own installed version - pinned only to /var/lib/dpkg/status. Reading that
+# Candidate as "latest" would call it up to date forever, so the dpkg status
+# pin must not count as a source.
+@test "apt_package_is_repo_served: false when only the dpkg status pin exists" {
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 100
+        100 /var/lib/dpkg/status"
+    run apt_package_is_repo_served "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_package_is_repo_served: true for a non-http source scheme" {
+    stub_apt_cache_policy "local-app:
+  Installed: (none)
+  Candidate: 1.2.3
+  Version table:
+     1.2.3 500
+        500 file:/srv/local-repo ./ Packages"
+    run apt_package_is_repo_served "local-app"
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_package_is_repo_served: false for an unknown package" {
+    stub_apt_cache_policy "N: Unable to locate package nope"
+    run apt_package_is_repo_served "nope"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_package_is_repo_served: false when given no package name" {
+    stub_apt_cache_policy "anything"
+    run apt_package_is_repo_served ""
+    [ "$status" -ne 0 ]
+}
+
 # The firefox snippet asks the same question about Mozilla's host, and hit the
 # same wrong answer: it grepped `mozilla.list` alone, so a deb822-migrated
 # machine read as unconfigured and the snippet appended a duplicate entry.
@@ -960,6 +1024,159 @@ stub_vscode_dpkg_version() {
     run verify_configured_update_result "1.140.0-1790227310" "1.140.0-1790270607" "update completed"
     [ "$status" -ne 0 ]
     [[ "$output" == *"did not reach the expected version"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# claude-desktop: the version source must follow the install channel
+# ---------------------------------------------------------------------------
+#
+# Claude Desktop now ships from Anthropic's own apt repository as well as from
+# the community packaging on GitHub, whose releases trail it. Checking an
+# apt-installed package against GitHub reported the installed version as
+# "newer than latest release" on the dashboard. These tests run the REAL
+# snippet against a stubbed dpkg/apt and a stubbed GitHub API.
+
+source_claude_desktop_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/cd/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/cd/lib"
+    cp "$REPO_ROOT/scripts/upgrade_snippets/claude_desktop.yaml" "$snippets_dir/"
+    # Drop the trailing invocation so the functions can be sourced on their own.
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_claude_desktop.sh" \
+        > "$snippets_dir/update_claude_desktop.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_claude_desktop.sh"
+}
+
+# dpkg reports $1 installed for claude-desktop, on amd64.
+stub_claude_desktop_dpkg() {
+    export STUB_CD_VERSION="$1"
+    dpkg-query() {
+        [ "$3" = "claude-desktop" ] || return 1
+        printf '%s' "$STUB_CD_VERSION"
+    }
+    dpkg() {
+        [ "$1" = "--print-architecture" ] && echo "amd64"
+    }
+}
+
+# A release carrying the community .deb for $1, the way the API returns it.
+stub_claude_desktop_github() {
+    export STUB_CD_RELEASE_VERSION="$1"
+    curl() {
+        printf '{"tag_name": "v3.3.4+claude%s", "assets": [{"browser_download_url": "https://github.com/aaddrick/claude-desktop-debian/releases/download/v3.3.4/claude-desktop_%s_amd64.deb"}]}' \
+            "$STUB_CD_RELEASE_VERSION" "$STUB_CD_RELEASE_VERSION"
+    }
+}
+
+@test "claude-desktop: an apt-served package is checked against the apt candidate" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.19675.1"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    # The community release trails Anthropic's repository; it must not be
+    # consulted at all, let alone compared against.
+    export CURL_MARKER="$BATS_TEST_TMPDIR/curl-was-called"
+    curl() { : > "$CURL_MARKER"; return 1; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"up_to_date"'* ]]
+    [[ "$output" == *'"latest_version":"2.19675.1"'* ]]
+    [ ! -f "$CURL_MARKER" ]
+}
+
+# The regression itself: GitHub's newest .deb (2.9939.4) is numerically behind
+# the apt-installed build (2.19675.1), which rendered as "newer than latest
+# release" for a machine that was simply up to date.
+@test "claude-desktop: an apt-served package is never reported ahead of GitHub" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.19675.1"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    stub_claude_desktop_github "2.9939.4"
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" != *'"status":"self_managed"'* ]]
+    [[ "$output" != *"newer than latest"* ]]
+}
+
+@test "claude-desktop: an apt-served package behind the candidate needs an update" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.9939.4"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.9939.4
+  Candidate: 2.19675.1
+  Version table:
+     2.19675.1 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+ *** 2.9939.4 500
+        100 /var/lib/dpkg/status"
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"update_available"'* ]]
+    [[ "$output" == *'"latest_version":"2.19675.1"'* ]]
+}
+
+# No apt source carries it -> it came from the community .deb, and that is the
+# channel to compare against and install from.
+@test "claude-desktop: a hand-installed .deb still checks the GitHub release" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.7032.0"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.7032.0
+  Candidate: 2.7032.0
+  Version table:
+ *** 2.7032.0 100
+        100 /var/lib/dpkg/status"
+    stub_claude_desktop_github "2.9939.4"
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"update_available"'* ]]
+    [[ "$output" == *'"latest_version":"2.9939.4"'* ]]
+}
+
+# Installing the community .deb over an apt-managed install would swap the
+# machine onto the other channel, and apt would overwrite it again next run.
+@test "claude-desktop: the apt channel upgrades through apt, not dpkg -i" {
+    source_claude_desktop_functions
+    export APT_MARKER="$BATS_TEST_TMPDIR/apt-was-called"
+    export WGET_MARKER="$BATS_TEST_TMPDIR/wget-was-called"
+    CLAUDE_DESKTOP_CHANNEL="apt"
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    CLAUDE_DESKTOP_DEB_URL=""
+    LATEST_VERSION="2.19675.1"
+    APP_DISPLAY_NAME="Claude Desktop"
+    sudo_can_run() { return 0; }
+    update_via_package_manager() { : > "$APT_MARKER"; return 0; }
+    wget() { : > "$WGET_MARKER"; return 0; }
+    detect_installed_claude_desktop() { CLAUDE_DESKTOP_VERSION="2.19675.1"; return 0; }
+
+    run perform_claude_desktop_update
+    [ "$status" -eq 0 ]
+    [ -f "$APT_MARKER" ]
+    [ ! -f "$WGET_MARKER" ]
 }
 
 # ---------------------------------------------------------------------------

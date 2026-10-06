@@ -4,17 +4,28 @@
 # SNIPPET_ID: claude-desktop
 # SNIPPET_NAME: Claude Desktop (Linux .deb)
 #
-# Claude Desktop has no official Linux build. This snippet updates the
-# community packaging provided by aaddrick/claude-desktop-debian, which ships
-# prebuilt .deb assets on its GitHub releases.
+# Claude Desktop on Linux now ships two ways, and the installed package can
+# come from either, so this snippet picks the channel that is actually in use:
 #
-# The comparison is like-for-like: the current version is read from the
-# installed dpkg package, and the latest version *and* the download URL both
-# come from the single matching release asset. The thing we compare against is
-# exactly the thing we would install, so we never report an update that cannot
-# be applied (see snippet-install-channel-vs-version-source note).
+#   apt    - Anthropic's own repository (downloads.claude.ai/claude-desktop/apt).
+#            When an enabled apt source serves the package, apt is both the
+#            version source and the install channel.
+#   github - the community packaging aaddrick/claude-desktop-debian, which
+#            ships prebuilt .deb assets on its GitHub releases. Used only when
+#            no apt source carries the package.
 #
-# Reference: https://github.com/aaddrick/claude-desktop-debian
+# Mixing the two is what the channel must prevent: the community releases trail
+# Anthropic's own repository, so checking an apt-installed package against
+# GitHub reports the installed version as "newer than latest release" (or, the
+# other way round, offers a .deb that apt would overwrite on the next upgrade).
+#
+# Within each channel the comparison stays like-for-like: the current version
+# is the installed dpkg version, and the latest version is the dpkg version of
+# the exact artifact we would install - the apt candidate, or the matching
+# release asset whose URL we download. We never report an update that cannot be
+# applied (see snippet-install-channel-vs-version-source note).
+#
+# References: https://github.com/aaddrick/claude-desktop-debian
 #
 # Version: 0.1.0-alpha
 # Date: 2026-07-07
@@ -23,6 +34,9 @@
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   0.2.0-alpha (2026-10-06) - Detect the install channel; prefer Anthropic's
+#                              official apt repository over the community
+#                              GitHub packaging when apt serves the package
 #   0.1.0-alpha (2026-07-07) - Initial alpha version
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +55,22 @@ CLAUDE_DESKTOP_PACKAGES=("claude-desktop" "claude-desktop-unofficial")
 CLAUDE_DESKTOP_PKG=""
 CLAUDE_DESKTOP_VERSION=""
 CLAUDE_DESKTOP_DEB_URL=""
+# "apt" or "github" - which channel the installed package came from.
+CLAUDE_DESKTOP_CHANNEL=""
+
+# The apt candidate version for a package, verbatim.
+# Args: <pkg>; echoes the candidate, or nothing when apt has none.
+#
+# Unlike get_apt_latest_version this keeps any Debian revision suffix: the
+# current version it is compared against is the dpkg version of the same
+# package, so stripping "-1" off one side only would make an unchanged package
+# look newer than its own candidate.
+claude_desktop_apt_candidate() {
+    local candidate
+    candidate=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')
+    [ -n "$candidate" ] && [ "$candidate" != "(none)" ] || return 1
+    printf '%s\n' "$candidate"
+}
 
 # Detect the installed Claude Desktop package and its dpkg version.
 # Sets the globals CLAUDE_DESKTOP_PKG and CLAUDE_DESKTOP_VERSION directly (must
@@ -147,9 +177,10 @@ resolve_claude_desktop_from_tag() {
     return 1
 }
 
-# Resolve current/latest versions and the download URL.
+# Resolve current/latest versions and, on the github channel, the download URL.
 # Sets CURRENT_VERSION, LATEST_VERSION, VERSION_STATUS, APP_DISPLAY_NAME,
-# CLAUDE_DESKTOP_PKG, CLAUDE_DESKTOP_DEB_URL. Returns 1 if it cannot proceed.
+# CLAUDE_DESKTOP_PKG, CLAUDE_DESKTOP_CHANNEL, CLAUDE_DESKTOP_DEB_URL.
+# Returns 1 if it cannot proceed.
 claude_desktop_version_check() {
     print_operation_header "$(get_config messages.checking_updates)"
 
@@ -166,6 +197,23 @@ claude_desktop_version_check() {
     fi
     CURRENT_VERSION="$CLAUDE_DESKTOP_VERSION"
 
+    # Preferred channel: Anthropic's own apt repository, when an enabled source
+    # serves this package. Both sides are then dpkg versions of the same
+    # package from the same repository, and the upgrade is a plain apt one.
+    LATEST_VERSION=""
+    CLAUDE_DESKTOP_DEB_URL=""
+    CLAUDE_DESKTOP_CHANNEL="github"
+    if apt_package_is_repo_served "$CLAUDE_DESKTOP_PKG"; then
+        if LATEST_VERSION=$(claude_desktop_apt_candidate "$CLAUDE_DESKTOP_PKG"); then
+            CLAUDE_DESKTOP_CHANNEL="apt"
+            print_status "Tracking $APP_DISPLAY_NAME through apt (package: $CLAUDE_DESKTOP_PKG)"
+            compare_and_report_versions "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_DISPLAY_NAME"
+            VERSION_STATUS=$?
+            return 0
+        fi
+        LATEST_VERSION=""
+    fi
+
     local arch
     arch=$(dpkg --print-architecture 2>/dev/null)
     [ -n "$arch" ] || arch="amd64"
@@ -174,9 +222,8 @@ claude_desktop_version_check() {
     owner=$(get_config repository.owner)
     repo=$(get_config repository.repo)
 
-    # Preferred: read the actual asset list from the release JSON.
-    LATEST_VERSION=""
-    CLAUDE_DESKTOP_DEB_URL=""
+    # Preferred within the github channel: read the actual asset list from the
+    # release JSON.
     local release_json asset
     if release_json=$(fetch_claude_desktop_release_json "$owner" "$repo"); then
         asset=$(select_claude_desktop_asset "$release_json" "$CLAUDE_DESKTOP_PKG" "$arch")
@@ -205,21 +252,71 @@ claude_desktop_version_check() {
     return 0
 }
 
-perform_claude_desktop_update() {
-    local output_lines fix_deps success_msg
+# Pre-flight shared by both channels: installing needs root either way. Bail
+# before doing any work in a non-interactive context without cached sudo
+# credentials, rather than downloading a package we cannot install.
+# Args: <command the operator would have to authorise>
+claude_desktop_require_sudo() {
+    sudo_can_run && return 0
+
+    emit_sudo_required_event "$1" "false"
+    print_error "Sudo credentials required to install ${APP_DISPLAY_NAME}"
+    print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
+    return 1
+}
+
+# Confirm the installed package actually advanced to the version we resolved.
+verify_claude_desktop_update() {
+    if ! detect_installed_claude_desktop; then
+        print_error "Failed to verify active $APP_DISPLAY_NAME version after update"
+        return 1
+    fi
+    local verified_version="$CLAUDE_DESKTOP_VERSION"
+    print_status "Verified version: $verified_version"
+
+    local verify_cmp
+    compare_versions "$verified_version" "$LATEST_VERSION"
+    verify_cmp=$?
+    if [ "$verify_cmp" -eq 2 ]; then
+        print_error "$APP_DISPLAY_NAME update did not reach the expected version: $verified_version < $LATEST_VERSION"
+        return 1
+    fi
+
+    return 0
+}
+
+claude_desktop_success_message() {
+    local success_msg
+    success_msg=$(get_config messages.update_success)
+    printf '%s\n' "${success_msg:-$APP_DISPLAY_NAME updated successfully}"
+}
+
+# apt channel: upgrade in place from the repository that already serves the
+# package. No download or dpkg -i of our own - that would install the community
+# build over the official one and swap the machine onto the other channel.
+perform_claude_desktop_apt_update() {
+    claude_desktop_require_sudo "apt-get install --only-upgrade ${CLAUDE_DESKTOP_PKG}" || return 1
+
+    print_status "$(get_config messages.installing)"
+    if ! update_via_package_manager "$CLAUDE_DESKTOP_PKG"; then
+        print_error "Failed to upgrade $APP_DISPLAY_NAME via apt"
+        return 1
+    fi
+
+    verify_claude_desktop_update || return 1
+
+    print_success "$(claude_desktop_success_message)"
+    return 0
+}
+
+# github channel: download the matching release asset and install it with dpkg.
+perform_claude_desktop_deb_update() {
+    local output_lines fix_deps
     output_lines=$(get_config update.output_lines)
     output_lines="${output_lines:-20}"
     fix_deps=$(get_config update.fix_dependencies)
-    success_msg=$(get_config messages.update_success)
 
-    # Pre-flight: dpkg -i and the dependency repair need root. Bail before the
-    # download in a non-interactive context without cached sudo credentials.
-    if ! sudo_can_run; then
-        emit_sudo_required_event "dpkg -i <package for ${APP_DISPLAY_NAME}>" "false"
-        print_error "Sudo credentials required to install ${APP_DISPLAY_NAME}"
-        print_error "Re-run in an interactive terminal or authenticate sudo before using non-interactive mode"
-        return 1
-    fi
+    claude_desktop_require_sudo "dpkg -i <package for ${APP_DISPLAY_NAME}>" || return 1
 
     local temp_file
     temp_file=$(mktemp "/tmp/claude-desktop-XXXXXX.deb") || return 1
@@ -266,24 +363,20 @@ perform_claude_desktop_update() {
 
     rm -f "$temp_file"
 
-    # Verify the installed package actually advanced to the latest version.
-    if ! detect_installed_claude_desktop; then
-        print_error "Failed to verify active $APP_DISPLAY_NAME version after update"
-        return 1
-    fi
-    local verified_version="$CLAUDE_DESKTOP_VERSION"
-    print_status "Verified version: $verified_version"
+    verify_claude_desktop_update || return 1
 
-    local verify_cmp
-    compare_versions "$verified_version" "$LATEST_VERSION"
-    verify_cmp=$?
-    if [ "$verify_cmp" -eq 2 ]; then
-        print_error "$APP_DISPLAY_NAME update did not reach the expected version: $verified_version < $LATEST_VERSION"
-        return 1
-    fi
-
-    print_success "${success_msg:-$APP_DISPLAY_NAME updated successfully}"
+    print_success "$(claude_desktop_success_message)"
     return 0
+}
+
+# Route to the channel the installed package actually came from.
+perform_claude_desktop_update() {
+    if [ "$CLAUDE_DESKTOP_CHANNEL" = "apt" ]; then
+        perform_claude_desktop_apt_update
+        return $?
+    fi
+
+    perform_claude_desktop_deb_update
 }
 
 update_claude_desktop() {

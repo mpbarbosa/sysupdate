@@ -707,6 +707,25 @@ apt_repository_is_configured() {
     return 1
 }
 
+# True when an enabled apt source actually serves the package - i.e. apt itself
+# could install or upgrade it, so apt is a legitimate version source for it.
+#
+# `apt-cache policy` answers for any package dpkg knows about, and for one
+# installed from a hand-downloaded .deb the Candidate is simply its own
+# installed version. A snippet reading the Candidate alone would therefore call
+# such a package permanently "up to date". Only an origin line in the version
+# table ("500 https://repo ... Packages") proves a repository carries it; the
+# "100 /var/lib/dpkg/status" pin is the installed copy, not a source.
+apt_package_is_repo_served() {
+    local package="$1"
+
+    [ -n "$package" ] || return 1
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    apt-cache policy "$package" 2>/dev/null \
+        | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[a-z][a-z0-9+.-]*:'
+}
+
 #=============================================================================
 # VERSION CHECKING FUNCTIONS
 #=============================================================================
