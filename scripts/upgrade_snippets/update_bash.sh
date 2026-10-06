@@ -14,6 +14,13 @@
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   1.2.0-alpha (2026-10-06) - Version lookup survives an unreachable Savannah:
+#                              git's connection errors are captured instead of
+#                              leaking to the console, every probe is bounded by
+#                              a timeout, https and the GNU release listing are
+#                              tried as fallbacks, and a lookup that finds no
+#                              source reports "unknown" with the reason rather
+#                              than a bare failure
 #   1.1.0-alpha (2025-11-27) - Changed to Git repository source
 #                            - Uses git://git.savannah.gnu.org/bash.git
 #                            - Tag-based version detection
@@ -39,23 +46,155 @@ source "$LIB_DIR/upgrade_utils.sh"
 # Load configuration
 CONFIG_FILE="$SCRIPT_DIR/bash.yaml"
 
-# Get latest bash version from Git repository tags
-get_latest_bash_version() {
-    local git_url
-    git_url=$(get_config "version.git_url")
-    
-    # Fetch tags from repository and extract the latest version
-    local latest_tag
-    latest_tag=$(git ls-remote --tags "$git_url" | \
-        grep -oP 'refs/tags/bash-\K[0-9]+\.[0-9]+(?=\^\{\}|$)' | \
-        sort -V | tail -n1)
-    
-    if [ -z "$latest_tag" ]; then
+# Seconds any single remote probe may take. git.savannah.gnu.org has
+# multi-day outages, and a connection to an unreachable host otherwise sits in
+# TCP retries for minutes with the whole update run blocked behind it.
+SYSUPDATE_BASH_REMOTE_TIMEOUT="${SYSUPDATE_BASH_REMOTE_TIMEOUT:-20}"
+
+# Results of the last version lookup. These are set by functions that must NOT
+# be called in a subshell (`$(...)` would discard the assignments) - hence the
+# set-a-global style rather than echoing the version.
+BASH_LATEST_VERSION=""
+BASH_VERSION_LOOKUP_ERROR=""
+
+# Run a command under `timeout` when the system has one. Some minimal
+# containers do not ship coreutils' timeout; there we still run the probe, just
+# unbounded, rather than failing the check outright.
+run_bash_probe() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$SYSUPDATE_BASH_REMOTE_TIMEOUT" "$@"
+        return $?
+    fi
+    "$@"
+}
+
+# First non-empty line of a captured stderr file, trimmed to one console line.
+# git prints several lines per unreachable address ("errno=No route to host",
+# one per A/AAAA record); the first carries the reason.
+summarize_probe_error() {
+    local stderr_file="$1"
+
+    [ -s "$stderr_file" ] || return 0
+    grep -m1 -E '[^[:space:]]' "$stderr_file" 2>/dev/null \
+        | tr -d '\r' \
+        | cut -c1-200
+}
+
+# Read bash-X.Y tags from one git remote.
+# Args: <git-url>. Sets BASH_LATEST_VERSION on success, BASH_VERSION_LOOKUP_ERROR
+# on failure; must not run in a subshell. Returns 1 if the remote did not answer.
+#
+# git writes connection failures to stderr, which otherwise land in the run's
+# output as bare "git.savannah.gnu.org[0: ...]: errno=No route to host" lines -
+# no context, and the dashboard console shows them with nothing naming bash.
+# Capture them instead and let the caller report one summarised reason.
+fetch_bash_version_from_git_remote() {
+    local git_url="$1"
+    local stderr_file tags rc reason
+
+    [ -n "$git_url" ] || return 1
+
+    stderr_file=$(mktemp "${TMPDIR:-/tmp}/bash-ls-remote-XXXXXX") || {
+        BASH_VERSION_LOOKUP_ERROR="could not create a temporary file for the version probe"
+        return 1
+    }
+
+    # GIT_TERMINAL_PROMPT=0: a remote that answers but asks for credentials must
+    # not block a headless run on a prompt nobody is reading.
+    tags=$(GIT_TERMINAL_PROMPT=0 run_bash_probe git ls-remote --tags "$git_url" 2>"$stderr_file")
+    rc=$?
+    reason=$(summarize_probe_error "$stderr_file")
+    rm -f "$stderr_file"
+
+    if [ "$rc" -ne 0 ] || [ -z "$tags" ]; then
+        if [ "$rc" -eq 124 ]; then
+            reason="$git_url did not answer within ${SYSUPDATE_BASH_REMOTE_TIMEOUT}s"
+        fi
+        BASH_VERSION_LOOKUP_ERROR="${reason:-git ls-remote $git_url failed (exit $rc)}"
         return 1
     fi
-    
-    echo "$latest_tag"
+
+    BASH_LATEST_VERSION=$(printf '%s\n' "$tags" | \
+        grep -oP 'refs/tags/bash-\K[0-9]+\.[0-9]+(?=\^\{\}|$)' | \
+        sort -V | tail -n1)
+
+    if [ -z "$BASH_LATEST_VERSION" ]; then
+        BASH_VERSION_LOOKUP_ERROR="no bash-X.Y tags found at $git_url"
+        return 1
+    fi
+
     return 0
+}
+
+# Read the latest release series from the GNU release listing - a different
+# host from Savannah, so it still answers while Savannah itself is down.
+# Sets BASH_LATEST_VERSION / BASH_VERSION_LOOKUP_ERROR; no subshell.
+fetch_bash_version_from_gnu_listing() {
+    local listing_url version_pattern listing
+
+    listing_url=$(get_config "version.release_listing_url")
+    version_pattern=$(get_config "version.release_pattern")
+    if [ -z "$listing_url" ] || [ -z "$version_pattern" ]; then
+        return 1
+    fi
+
+    # --connect-timeout: a host that silently drops packets, as an unreachable
+    # ftp.gnu.org does, otherwise burns the whole --max-time budget before the
+    # run can move on. --tries=1 keeps wget from repeating that wait.
+    if command -v curl >/dev/null 2>&1; then
+        listing=$(curl -fsSL --connect-timeout 8 --max-time "$SYSUPDATE_BASH_REMOTE_TIMEOUT" "$listing_url" 2>/dev/null)
+    elif command -v wget >/dev/null 2>&1; then
+        listing=$(wget -qO- --tries=1 --timeout="$SYSUPDATE_BASH_REMOTE_TIMEOUT" --connect-timeout=8 "$listing_url" 2>/dev/null)
+    else
+        BASH_VERSION_LOOKUP_ERROR="neither curl nor wget is available to read $listing_url"
+        return 1
+    fi
+
+    if [ -z "$listing" ]; then
+        BASH_VERSION_LOOKUP_ERROR="$listing_url could not be reached"
+        return 1
+    fi
+
+    BASH_LATEST_VERSION=$(printf '%s\n' "$listing" | \
+        grep -oE "$version_pattern" | \
+        sed -nE "s/$version_pattern/\1/p" | \
+        sort -V | tail -n1)
+
+    if [ -z "$BASH_LATEST_VERSION" ]; then
+        BASH_VERSION_LOOKUP_ERROR="no bash releases matched at $listing_url"
+        return 1
+    fi
+
+    return 0
+}
+
+# Resolve the latest bash release series (X.Y) from the first source that
+# answers. Sets BASH_LATEST_VERSION, or BASH_VERSION_LOOKUP_ERROR with the last
+# reason; must not run in a subshell. Returns 1 when no source answered.
+#
+# The sources are tried widest-reach last: the upstream git:// remote, the same
+# repository over https (port 9418 is blocked on plenty of networks while 443 is
+# not), then the GNU release listing on another host for when Savannah is down.
+# All three report the same X.Y series, so which one answered does not change
+# the verdict.
+get_latest_bash_version() {
+    local url
+
+    BASH_LATEST_VERSION=""
+    BASH_VERSION_LOOKUP_ERROR=""
+
+    for url in "$(get_config "version.git_url")" "$(get_config "version.git_url_https")"; do
+        [ -n "$url" ] || continue
+        if fetch_bash_version_from_git_remote "$url"; then
+            return 0
+        fi
+    done
+
+    if fetch_bash_version_from_gnu_listing; then
+        return 0
+    fi
+
+    return 1
 }
 
 build_bash_from_source() {
@@ -300,13 +439,23 @@ bash_version_check() {
     local current_major_minor
     current_major_minor=$(echo "$current_version" | grep -oP '^[0-9]+\.[0-9]+')
     
-    # Get latest version from Git tags
-    local latest_version
-    latest_version=$(get_latest_bash_version)
-    
+    # Get latest version from the upstream repository (or its fallbacks). Not in
+    # a subshell: the lookup reports back through globals.
+    local latest_version=""
+    if get_latest_bash_version; then
+        latest_version="$BASH_LATEST_VERSION"
+    fi
+
+    # Nothing answered. That is a retryable network condition, not a verdict on
+    # the installed bash, so report "unknown" with the reason and carry on with
+    # the rest of the run rather than failing loudly.
     if [ -z "$latest_version" ]; then
         emit_summary_event "version_check" "target" "Bash Shell" "status" "unknown" "current_version" "$current_version" "latest_version" "unknown"
-        print_error "Failed to fetch latest bash version from Git repository"
+        local unreachable_msg
+        unreachable_msg=$(get_config "messages.version_sources_unreachable")
+        print_warning "${unreachable_msg:-Could not determine the latest bash release}"
+        [ -n "$BASH_VERSION_LOOKUP_ERROR" ] && print_status "Last attempt: $BASH_VERSION_LOOKUP_ERROR"
+        print_status "Installed bash is v$current_version; the check will retry on the next run"
         return 1
     fi
     

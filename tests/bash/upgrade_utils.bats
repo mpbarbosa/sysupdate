@@ -1027,6 +1027,173 @@ stub_vscode_dpkg_version() {
 }
 
 # ---------------------------------------------------------------------------
+# bash: an unreachable git.savannah.gnu.org must degrade, not shout
+# ---------------------------------------------------------------------------
+#
+# Savannah has multi-day outages, and many networks block the git protocol's
+# port 9418 outright. The lookup used to run a bare `git ls-remote`, so git's
+# own "errno=No route to host" lines landed in the run output with nothing
+# naming bash, and the check ended in a red error for what is a retryable
+# network condition. These tests run the REAL snippet against stub binaries.
+
+source_bash_snippet_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/bashsnip/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/bashsnip/lib"
+    cp "$REPO_ROOT/scripts/upgrade_snippets/bash.yaml" "$snippets_dir/"
+    # Drop the trailing invocation so the functions can be sourced on their own.
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_bash.sh" \
+        > "$snippets_dir/update_bash.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_bash.sh"
+}
+
+# Stub git and curl as real executables, NOT shell functions: the probes run
+# under `timeout`, which execs the binary and would never see a function.
+#
+# The git stub answers for $STUB_GIT_OK_URL and fails like an unreachable host
+# for everything else, writing the same shape of stderr git does.
+stub_bash_remotes() {
+    local stubdir="$BATS_TEST_TMPDIR/bashbin"
+    mkdir -p "$stubdir"
+    cat > "$stubdir/git" <<'STUB'
+#!/bin/sh
+url=$(eval echo "\${$#}")
+if [ -n "$STUB_GIT_OK_URL" ] && [ "$url" = "$STUB_GIT_OK_URL" ]; then
+    printf 'abc123\trefs/tags/bash-5.2\n'
+    printf 'def456\trefs/tags/bash-5.3\n'
+    printf 'def456\trefs/tags/bash-5.3^{}\n'
+    exit 0
+fi
+echo "$url[0: 209.51.188.168]: errno=No route to host" >&2
+echo "$url[1: 2001:470:142::168]: errno=Network is unreachable" >&2
+echo "fatal: unable to connect to git.savannah.gnu.org:" >&2
+exit 128
+STUB
+    cat > "$stubdir/curl" <<'STUB'
+#!/bin/sh
+if [ -n "$STUB_GNU_LISTING" ]; then
+    cat "$STUB_GNU_LISTING"
+    exit 0
+fi
+echo "curl: (28) Connection timed out" >&2
+exit 28
+STUB
+    chmod +x "$stubdir/git" "$stubdir/curl"
+    export PATH="$stubdir:$PATH"
+}
+
+# A directory index the way ftp.gnu.org serves one.
+write_gnu_bash_listing() {
+    cat > "$BATS_TEST_TMPDIR/gnu-bash-index.html" <<'HTML'
+<a href="bash-5.1.tar.gz">bash-5.1.tar.gz</a>
+<a href="bash-5.2.tar.gz">bash-5.2.tar.gz</a>
+<a href="bash-5.3.tar.gz">bash-5.3.tar.gz</a>
+<a href="bash-5.3.tar.gz.sig">bash-5.3.tar.gz.sig</a>
+HTML
+    export STUB_GNU_LISTING="$BATS_TEST_TMPDIR/gnu-bash-index.html"
+}
+
+@test "bash: the git remote answers and the highest series wins" {
+    stub_bash_remotes
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL="git://git.savannah.gnu.org/bash.git"
+
+    # Called directly, not under `run`: the lookup reports through globals, and
+    # a subshell would discard them - which is why the snippet must not call it
+    # in a command substitution either.
+    get_latest_bash_version
+    [ "$BASH_LATEST_VERSION" = "5.3" ]
+    [ -z "$BASH_VERSION_LOOKUP_ERROR" ]
+}
+
+# The point of the change: git's connection noise is captured, and the run
+# reports one summarised reason instead.
+@test "bash: git connection errors never leak into the run output" {
+    stub_bash_remotes
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL=""
+    export QUIET_MODE=true
+    enable_json_events
+
+    run bash_version_check
+    [[ "$output" != *"errno=No route to host"* ]]
+    [[ "$output" != *"Network is unreachable"* ]]
+    [[ "$output" == *"Could not reach any bash release source"* ]]
+}
+
+# A network miss is retryable, so it reports "unknown" - not a verdict on the
+# installed bash, and not a bare failure.
+@test "bash: an unreachable Savannah reports unknown, not an error" {
+    stub_bash_remotes
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL=""
+    export QUIET_MODE=true
+    enable_json_events
+
+    run bash_version_check
+    [[ "$output" == *'"status":"unknown"'* ]]
+    [[ "$output" == *'"latest_version":"unknown"'* ]]
+    [[ "$output" != *'"status":"update_available"'* ]]
+    # The installed version is still known, and still reported.
+    [[ "$output" != *'"current_version":"unknown"'* ]]
+    # Reported as a warning: nothing is broken, the sources just did not answer.
+    [[ "$output" != *"[ERROR]"* ]]
+    [[ "$output" != *'"line_type":"error"'* ]]
+}
+
+# Port 9418 blocked but 443 open: the same repository over https still answers.
+@test "bash: falls back to https when the git protocol cannot connect" {
+    stub_bash_remotes
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL="https://git.savannah.gnu.org/git/bash.git"
+
+    get_latest_bash_version
+    [ "$BASH_LATEST_VERSION" = "5.3" ]
+}
+
+# Savannah down altogether: the GNU release listing is on another host.
+@test "bash: falls back to the GNU release listing when Savannah is down" {
+    stub_bash_remotes
+    write_gnu_bash_listing
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL=""
+
+    get_latest_bash_version
+    [ "$BASH_LATEST_VERSION" = "5.3" ]
+}
+
+@test "bash: with every source down the failure names the last reason" {
+    stub_bash_remotes
+    source_bash_snippet_functions
+    export STUB_GIT_OK_URL=""
+
+    ! get_latest_bash_version
+    [ -z "$BASH_LATEST_VERSION" ]
+    [[ "$BASH_VERSION_LOOKUP_ERROR" == *"ftp.gnu.org"* ]]
+}
+
+# An unreachable host that drops packets instead of refusing would otherwise
+# hold the whole run; every probe runs under a timeout.
+@test "bash: a hanging git remote is bounded by the probe timeout" {
+    local stubdir="$BATS_TEST_TMPDIR/hangbin"
+    mkdir -p "$stubdir"
+    printf '#!/bin/sh\nsleep 30\n' > "$stubdir/git"
+    chmod +x "$stubdir/git"
+    export PATH="$stubdir:$PATH"
+    source_bash_snippet_functions
+    export SYSUPDATE_BASH_REMOTE_TIMEOUT=1
+    # A missing function would "fail" the probe instantly and pass the timing
+    # assertion below for the wrong reason.
+    declare -F fetch_bash_version_from_git_remote
+
+    local started=$SECONDS
+    run fetch_bash_version_from_git_remote "git://git.savannah.gnu.org/bash.git"
+    [ "$status" -ne 0 ]
+    [ $((SECONDS - started)) -lt 10 ]
+}
+
+# ---------------------------------------------------------------------------
 # claude-desktop: the version source must follow the install channel
 # ---------------------------------------------------------------------------
 #

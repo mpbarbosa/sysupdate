@@ -1,13 +1,17 @@
 # Bash Update Configuration
 # Configuration for bash shell upgrade from source
 #
-# Version: 1.1.0-alpha
-# Date: 2025-11-27
+# Version: 1.2.0-alpha
+# Date: 2026-10-06
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   1.2.0-alpha (2026-10-06) - Added version-lookup fallbacks for an unreachable
+#                              Savannah: the same repository over https (port
+#                              9418 is blocked on many networks) and the GNU
+#                              release listing on a different host
 #   1.1.0-alpha (2025-11-27) - Changed to Git repository source
 #                            - Uses git://git.savannah.gnu.org/cgit/bash.git
 #                            - Updated build process for Git cloning
@@ -24,6 +28,7 @@ messages:
     Source: https://www.gnu.org/software/bash/
     Download: https://ftp.gnu.org/gnu/bash/
   failed_get_version: "Failed to get current bash version"
+  version_sources_unreachable: "Could not reach any bash release source - the latest version is unknown"
   updating: "Updating bash..."
   skipping_update: "Skipping bash update"
   
@@ -64,6 +69,13 @@ version:
   source: "git"
   git_url: "git://git.savannah.gnu.org/bash.git"
   tag_pattern: '^bash-[0-9]+\.[0-9]+$'
+  # Tried in order when git_url cannot be reached. Same repository over https,
+  # because many networks block the git protocol's port 9418 while allowing
+  # 443; then the GNU release listing, which lives on a different host and so
+  # still answers during a Savannah outage. All report the same X.Y series.
+  git_url_https: "https://git.savannah.gnu.org/git/bash.git"
+  release_listing_url: "https://ftp.gnu.org/gnu/bash/"
+  release_pattern: 'bash-([0-9]+\.[0-9]+)\.tar\.gz'
 
 # Update method prompt
 prompts:
