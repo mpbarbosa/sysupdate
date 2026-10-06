@@ -19,6 +19,13 @@ Two files implement the Node.js bridge between the CLI and the web dashboard:
 - `SYSUPDATE_SCRIPT_PATH` env var overrides the CLI path for test isolation
 - `SYSUPDATE_WEB_HOST` / `SYSUPDATE_WEB_PORT` control the server bind address (default `127.0.0.1:4174`)
 - `SYSUPDATE_LOG_FILE` / `SYSUPDATE_LOG_LIMIT` control log history
+- Run controls: `POST /api/runs/pause` / `/resume` / `/stop` all answer 409 when no run is active.
+  Pause and resume are separate routes rather than one toggle so two dashboards cannot flip a run
+  back and forth; each is idempotent (200, not an error, when the run is already in that state).
+  They signal `-child.pid` via `signalRunTree`, which is why `spawn` passes `detached: true` —
+  signalling the Bash pid alone would leave apt/sudo/make running. `stopRun` sets `stopRequested`
+  so the close handler reports `stopped` rather than the `failed` a SIGTERM exit code implies, and
+  arms a `SIGKILL` escalation (`STOP_GRACE_MS`) that `clearStopEscalation` disarms on close
 - `POST /api/shutdown` is the only route that ends the process: 409 while a run is active unless `{ force: true }`; it broadcasts `bridge.shutdown` before `shutdown()` runs, and `shutdown()` is idempotent with a 2s hard-exit cap for idle keep-alive connections
 - Sudo askpass relay: the child has no TTY, so `server.js` sets `SUDO_ASKPASS` to a generated wrapper (0700 temp dir, one per bridge process) that runs `sudo_askpass.mjs`; the CLI's `enable_sudo_askpass_shim` makes every `sudo` call use it. A request surfaces as `run.sudoPrompt` (`requested` → `resolved` / `cancelled` / `expired`) in snapshots; `POST /api/runs/sudo-password` with `{ requestId, password }` or `{ requestId, cancel: true }` answers it (400 malformed, 404 no such pending prompt). The password lives only in the run's in-memory `sudo` state (never in snapshots, terminal lines or logs), is reused for later sudo invocations in the same run, and is wiped when the child exits. The same sudo pid asking twice means rejection → prompt again with `rejected: true`. Only enabled on a loopback `SYSUPDATE_WEB_HOST` (`SYSUPDATE_SUDO_RELAY=false` disables it); `bootstrap.backend.supports` then lists `sudo-askpass`
 

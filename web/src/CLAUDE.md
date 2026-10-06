@@ -8,6 +8,7 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 | `types.ts` | All shared interfaces (`UpdateItem`, `BackendRunSnapshot`, `SystemConfig`, …) |
 | `summaryStatus.ts` | Pure CLI-status → card status/severity mapping (+ `summaryStatus.test.ts`) |
 | `updateCard.ts` | Pure card affordances — which button, versions vs remediation (+ `updateCard.test.ts`) |
+| `runControls.ts` | Pure top-bar run-control affordances — stop/pause availability by run status (+ `runControls.test.ts`) |
 | `updateFilter.ts` | Pure list filtering — sidebar category + "hide up to date" toggle (+ `updateFilter.test.ts`) |
 | `theme.ts` | Pure theme helpers — no component logic, no React imports |
 | `theme.test.ts` | Vitest unit tests for theme helpers |
@@ -27,6 +28,17 @@ React 19 + TypeScript dashboard (Cyber-Terminal HUD). Entry point: `main.tsx`.
 - Mock data lives in `data/mockData.ts`, never inline in component bodies
 - `ScheduleTask.command` is intended for `sysupdate --snippet <id>` but crontab wiring is not yet implemented
 - `handleRunAll` in `App.tsx` is a stub — only individual snippet upgrades are wired to the live backend
+- Run status guards use `isRunActiveStatus` from `runControls.ts`, never a literal
+  `status === 'running'` comparison: a `paused` run is still active, and an effect that misses that
+  treats a suspended run as finished and starts the next queued auto-upgrade
+- `handleStop` and `handleTogglePause` deliberately ignore the body of the bridge's response and let
+  the WebSocket broadcast drive the state change. The child usually exits before the HTTP promise
+  resolves, so that body describes a run that is already over; applying it last pins a finished run
+  as `running` with no further snapshot to correct it. The run-*start* paths do apply their response,
+  because there it is the first state and later broadcasts supersede it
+- `handleStop` clears the auto-upgrade queue before calling the bridge — interrupting a run ends the
+  batch, it does not advance it — and `applyRunSnapshot` releases any card left `updating` when a run
+  comes back `stopped`, since an interrupted run reports no result of its own
 - `shutdownState` in `App.tsx` swaps the whole tree for `components/ShutdownScreen.tsx` once the bridge confirms it is stopping (`POST /api/shutdown` from this tab, or a `bridge.shutdown` WebSocket message from another); `window.close()` is only attempted by the tab that asked
 - `components/SudoPasswordModal.tsx` overlays the dashboard while `currentRun.sudoPrompt.status === 'requested'` (the CLI is blocked inside sudo); `App.tsx` answers via `POST /api/runs/sudo-password` and never keeps the password in state — the input clears on every new `requestId`, and `rejected: true` shows the "try again" line
 

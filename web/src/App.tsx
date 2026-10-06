@@ -5,6 +5,7 @@ import DashboardView from './components/DashboardView';
 import ShutdownScreen from './components/ShutdownScreen';
 import SudoPasswordModal from './components/SudoPasswordModal';
 import { countHiddenUpToDate, filterUpdateItems } from './updateFilter';
+import { getRunControlState, isRunActiveStatus } from './runControls';
 import { pruneAutoUpdateIds } from './updateCard';
 import LogsView from './components/LogsView';
 import ScheduleView from './components/ScheduleView';
@@ -439,16 +440,24 @@ function App() {
 
     const nextLines = run.terminalLines.map(({ id, text, type }) => ({ id, text, type }));
     setTerminalLines(nextLines.length > 0 ? nextLines : [INITIAL_TERMINAL_LINE]);
-    setIsProcessing(run.status === 'starting' || run.status === 'running');
+    setIsProcessing(isRunActiveStatus(run.status));
     mergeSummaryItems(run.summaries, !run.args.includes('--snippet'));
     if (isRecord(run.lastLogEntry)) {
       mergeLogs([run.lastLogEntry]);
     }
 
     const runSnippetId = getRunSnippetId(run.args);
-    if (runSnippetId && !isCheckOnlyRun(run.args) && (run.status === 'starting' || run.status === 'running')) {
+    if (runSnippetId && !isCheckOnlyRun(run.args) && isRunActiveStatus(run.status)) {
       setUpdateItems((previous) =>
         previous.map((item) => (item.snippetId === runSnippetId ? { ...item, status: 'updating' } : item)),
+      );
+    }
+
+    // An interrupted run never reports a result, so nothing else would clear
+    // the spinner on the card it was upgrading. Hand it back as actionable.
+    if (run.status === 'stopped') {
+      setUpdateItems((previous) =>
+        previous.map((item) => (item.status === 'updating' ? { ...item, status: 'ready' } : item)),
       );
     }
 
@@ -579,8 +588,7 @@ function App() {
         mergeLogs(payload.logs);
 
         const hasActiveSnapshot = applyRunSnapshot(payload.run);
-        const shouldRefreshRun =
-          !payload.run || payload.run.status === 'completed' || payload.run.status === 'failed';
+        const shouldRefreshRun = !payload.run || !isRunActiveStatus(payload.run.status);
         if (!hasActiveSnapshot || shouldRefreshRun) {
           setTerminalLines([
             {
@@ -620,7 +628,7 @@ function App() {
       return;
     }
 
-    if (isCheckOnlyRun(currentRun.args) || currentRun.status === 'starting' || currentRun.status === 'running') {
+    if (isCheckOnlyRun(currentRun.args) || isRunActiveStatus(currentRun.status)) {
       return;
     }
 
@@ -649,7 +657,7 @@ function App() {
     if (!currentRun) {
       return;
     }
-    if (currentRun.status === 'starting' || currentRun.status === 'running') {
+    if (isRunActiveStatus(currentRun.status)) {
       return;
     }
 
@@ -892,6 +900,74 @@ function App() {
       });
   };
 
+  // Interrupting a run is the end of the batch, not a step in it: without this
+  // the auto-upgrade effect would see a settled run and start the next queued
+  // item, which is the opposite of what the stop button was pressed for.
+  const cancelAutoUpgradeQueue = useCallback((runId: string | null) => {
+    autoUpgradeQueueRef.current = [];
+    autoUpgradeInProgressRef.current = false;
+    refreshAfterUpgradeRef.current = false;
+    if (runId) {
+      advancedRunIdRef.current = runId;
+      handledScanIdRef.current = runId;
+    }
+  }, []);
+
+  const handleStop = useCallback(() => {
+    const runId = currentRun?.id ?? null;
+    if (!currentRun || !isRunActiveStatus(currentRun.status)) {
+      return;
+    }
+
+    cancelAutoUpgradeQueue(runId);
+    // The response body is deliberately not applied. The bridge broadcasts the
+    // transition over the WebSocket, and the child usually exits before this
+    // promise resolves — so the response describes a run that is already over,
+    // and applying it last would pin a finished run as 'running' for good.
+    void fetch('/api/runs/stop', { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Backend answered HTTP ${response.status}.`);
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Unknown backend error.';
+        setTerminalLines((previous) => [
+          ...previous,
+          { id: `backend-stop-error-${Date.now()}`, text: `Unable to stop the run: ${message}`, type: 'error' },
+        ]);
+      });
+  }, [cancelAutoUpgradeQueue, currentRun]);
+
+  const handleTogglePause = useCallback(() => {
+    if (!currentRun || !isRunActiveStatus(currentRun.status)) {
+      return;
+    }
+
+    const { toggleAction } = getRunControlState(currentRun.status);
+    // As in handleStop: the broadcast is the source of truth for this
+    // transition, not the response that races it.
+    void fetch(`/api/runs/${toggleAction}`, { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Backend answered HTTP ${response.status}.`);
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Unknown backend error.';
+        setTerminalLines((previous) => [
+          ...previous,
+          {
+            id: `backend-${toggleAction}-error-${Date.now()}`,
+            text: `Unable to ${toggleAction} the run: ${message}`,
+            type: 'error',
+          },
+        ]);
+      });
+  }, [currentRun]);
+
   const handleRunAll = () => {
     setTerminalLines((previous) => [
       ...previous,
@@ -1012,7 +1088,10 @@ function App() {
         onViewChange={setActiveView}
         onRefresh={handleRefresh}
         onRunAll={handleRunAll}
+        onStop={handleStop}
+        onTogglePause={handleTogglePause}
         onShutdown={handleShutdown}
+        runStatus={currentRun?.status ?? null}
         isProcessing={isProcessing}
         progress={progress}
         pendingTotal={pendingTotal}
