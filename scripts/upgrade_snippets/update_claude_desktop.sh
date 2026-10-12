@@ -7,12 +7,26 @@
 # Claude Desktop on Linux now ships two ways, and the installed package can
 # come from either, so this snippet picks the channel that is actually in use:
 #
-#   apt    - Anthropic's own repository (downloads.claude.ai/claude-desktop/apt).
-#            When an enabled apt source serves the package, apt is both the
-#            version source and the install channel.
-#   github - the community packaging aaddrick/claude-desktop-debian, which
-#            ships prebuilt .deb assets on its GitHub releases. Used only when
-#            no apt source carries the package.
+#   apt      - Anthropic's own repository (downloads.claude.ai/claude-desktop/apt).
+#              When an enabled apt source serves the package, apt is both the
+#              version source and the install channel.
+#   apt-pool - Anthropic's build installed without that repository registered
+#              (the documented CLAUDE_DESKTOP_ADD_REPO="false" install, or a
+#              pool .deb installed by hand). Still the official channel: the
+#              version comes from the repository's pool index and the update
+#              reinstalls from that same pool.
+#   github   - the community packaging aaddrick/claude-desktop-debian, which
+#              ships prebuilt .deb assets on its GitHub releases. Used only
+#              when no apt source carries the package and the installed one is
+#              not Anthropic's own build.
+#
+# On the apt channel the "latest" version does not come from the local apt
+# index alone. That index is only as fresh as the last `apt-get update`, which
+# --check-only and --snippet deliberately never run, so a stale candidate
+# reported a superseded version as the latest. Past a freshness window the
+# repository's own Packages index is read over HTTPS instead - no sudo, no
+# apt-get update - and `apt-get update && apt-get install --only-upgrade` then
+# reaches exactly that version, so the invariant below still holds.
 #
 # Mixing the two is what the channel must prevent: the community releases trail
 # Anthropic's own repository, so checking an apt-installed package against
@@ -27,13 +41,23 @@
 #
 # References: https://github.com/aaddrick/claude-desktop-debian
 #
-# Version: 0.1.0-alpha
-# Date: 2026-07-07
+# Version: 0.3.0-alpha
+# Date: 2026-10-12
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   0.3.0-alpha (2026-10-12) - Resolve the apt-channel latest version from the
+#                              repository's Packages index when the local apt
+#                              index is stale, so read-only discovery stops
+#                              reporting a superseded candidate as the latest
+#                            - New apt-pool channel for Anthropic's build
+#                              installed without the repository registered,
+#                              which previously fell through to the community
+#                              GitHub packaging and reported ahead_of_latest
+#                            - Respect an apt hold rather than promising an
+#                              upgrade that could not be applied
 #   0.2.0-alpha (2026-10-06) - Detect the install channel; prefer Anthropic's
 #                              official apt repository over the community
 #                              GitHub packaging when apt serves the package
@@ -55,8 +79,11 @@ CLAUDE_DESKTOP_PACKAGES=("claude-desktop" "claude-desktop-unofficial")
 CLAUDE_DESKTOP_PKG=""
 CLAUDE_DESKTOP_VERSION=""
 CLAUDE_DESKTOP_DEB_URL=""
-# "apt" or "github" - which channel the installed package came from.
+# "apt", "apt-pool" or "github" - which channel the installed package came from.
 CLAUDE_DESKTOP_CHANNEL=""
+# Human-readable provenance of LATEST_VERSION, so a reported version always
+# says which authority produced it.
+CLAUDE_DESKTOP_LATEST_SOURCE=""
 
 # The apt candidate version for a package, verbatim.
 # Args: <pkg>; echoes the candidate, or nothing when apt has none.
@@ -70,6 +97,152 @@ claude_desktop_apt_candidate() {
     candidate=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')
     [ -n "$candidate" ] && [ "$candidate" != "(none)" ] || return 1
     printf '%s\n' "$candidate"
+}
+
+# The dpkg architecture, which names both the pool asset and the release asset.
+claude_desktop_arch() {
+    local arch
+    arch=$(dpkg --print-architecture 2>/dev/null)
+    printf '%s\n' "${arch:-amd64}"
+}
+
+# True when the installed package is Anthropic's own build rather than the
+# community packaging. The dpkg Maintainer field is the discriminator, and it
+# travels with the package, so it answers even when no apt source is registered
+# and the version table says nothing about where the .deb came from.
+claude_desktop_package_is_official() {
+    local maintainer needle
+    maintainer=$(dpkg-query -W -f='${Maintainer}' "$1" 2>/dev/null)
+    [ -n "$maintainer" ] || return 1
+
+    needle=$(get_config apt_repository.official_maintainer)
+    [ -n "$needle" ] || needle="Anthropic"
+
+    case "$maintainer" in
+        *"$needle"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The highest version Anthropic's repository publishes for this architecture,
+# read from its own Packages index over HTTPS.
+claude_desktop_published_version() {
+    local base suite component
+    base=$(get_config apt_repository.base_url)
+    [ -n "$base" ] || return 1
+    suite=$(get_config apt_repository.suite)
+    component=$(get_config apt_repository.component)
+
+    fetch_debian_repo_latest_version \
+        "$base" "${suite:-stable}" "${component:-main}" "$(claude_desktop_arch)"
+}
+
+# Resolve the latest version on the apt channel and record where it came from.
+# Sets LATEST_VERSION and CLAUDE_DESKTOP_LATEST_SOURCE (so it must not run in a
+# subshell); returns 1 when no authority yields a version at all.
+#
+# The apt candidate is the better answer while the local index is fresh: it
+# accounts for pinning and apt preferences, so it is the version an upgrade
+# would actually install. But the index is only as fresh as the last
+# `apt-get update`, and --check-only and --snippet deliberately never run one,
+# so the candidate they read can name a long-superseded version. Past the
+# freshness window the cached candidate is not evidence, and the repository's
+# own index - public, no sudo, no apt-get update - is consulted instead.
+claude_desktop_resolve_apt_latest() {
+    local candidate
+    candidate=$(claude_desktop_apt_candidate "$CLAUDE_DESKTOP_PKG") || candidate=""
+
+    LATEST_VERSION="$candidate"
+    CLAUDE_DESKTOP_LATEST_SOURCE="apt candidate"
+
+    local host max_age
+    host=$(get_config apt_repository.host)
+    max_age=$(get_config apt_repository.index_max_age_seconds)
+    [ -n "$host" ] || return 0
+
+    apt_index_is_stale "$host" "${max_age:-3600}" || return 0
+
+    # Held back: the repository's newest version could not be installed even if
+    # we reported it, and this snippet never reports an update it cannot apply.
+    if apt_package_is_held "$CLAUDE_DESKTOP_PKG"; then
+        print_warning "$APP_DISPLAY_NAME is held by apt - reporting the held candidate"
+        return 0
+    fi
+
+    local published
+    published=$(claude_desktop_published_version) || published=""
+    if [ -z "$published" ]; then
+        [ -n "$LATEST_VERSION" ] || return 1
+        print_warning "Local apt index is stale and $host is unreachable - '$LATEST_VERSION' may be out of date"
+        CLAUDE_DESKTOP_LATEST_SOURCE="apt candidate (stale index, repository unreachable)"
+        return 0
+    fi
+
+    # Only ever move the answer forward. A candidate ahead of what the index
+    # publishes means another source serves this package too, and apt would
+    # install that one.
+    if [ -n "$candidate" ] && ! dpkg --compare-versions "$published" gt "$candidate"; then
+        return 0
+    fi
+
+    LATEST_VERSION="$published"
+    CLAUDE_DESKTOP_LATEST_SOURCE="repository index (local apt index is stale)"
+    return 0
+}
+
+# Echoes "<version> <download-url>" for the highest version Anthropic's pool
+# publishes for an architecture. Args: <arch>; returns 1 when unresolvable.
+claude_desktop_pool_asset() {
+    local arch="$1"
+    local base suite component index
+    base=$(get_config apt_repository.base_url)
+    [ -n "$base" ] || return 1
+    suite=$(get_config apt_repository.suite)
+    component=$(get_config apt_repository.component)
+
+    index=$(fetch_debian_repo_index \
+        "$base" "${suite:-stable}" "${component:-main}" "$arch") || return 1
+
+    local best_ver="" best_path="" ver path
+    while read -r ver path; do
+        [[ "$ver" =~ ^[0-9][A-Za-z0-9.+:~-]*$ ]] || continue
+
+        # Filename is external input that becomes a download URL. Keep it a
+        # relative path inside the pool so a rewritten index cannot aim the
+        # download at another host or walk out of the repository.
+        case "$path" in
+            pool/*) ;;
+            *) continue ;;
+        esac
+        case "$path" in
+            *..*) continue ;;
+        esac
+        case "${path##*/}" in
+            "${CLAUDE_DESKTOP_PKG}"_*.deb) ;;
+            *) continue ;;
+        esac
+
+        if [ -z "$best_ver" ] || dpkg --compare-versions "$ver" gt "$best_ver"; then
+            best_ver="$ver"
+            best_path="$path"
+        fi
+    done < <(printf '%s\n' "$index" | awk '
+        BEGIN { RS = "" }
+        {
+            ver = ""; fn = ""
+            n = split($0, lines, "\n")
+            for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /^Version:[[:space:]]/) {
+                    sub(/^Version:[[:space:]]*/, "", lines[i]); ver = lines[i]
+                } else if (lines[i] ~ /^Filename:[[:space:]]/) {
+                    sub(/^Filename:[[:space:]]*/, "", lines[i]); fn = lines[i]
+                }
+            }
+            if (ver != "" && fn != "") print ver " " fn
+        }')
+
+    [ -n "$best_ver" ] && [ -n "$best_path" ] || return 1
+    printf '%s %s\n' "$best_ver" "${base%/}/${best_path}"
 }
 
 # Detect the installed Claude Desktop package and its dpkg version.
@@ -197,26 +370,64 @@ claude_desktop_version_check() {
     fi
     CURRENT_VERSION="$CLAUDE_DESKTOP_VERSION"
 
+    LATEST_VERSION=""
+    CLAUDE_DESKTOP_DEB_URL=""
+    CLAUDE_DESKTOP_LATEST_SOURCE=""
+    CLAUDE_DESKTOP_CHANNEL="github"
+
+    local arch
+    arch=$(claude_desktop_arch)
+
     # Preferred channel: Anthropic's own apt repository, when an enabled source
     # serves this package. Both sides are then dpkg versions of the same
     # package from the same repository, and the upgrade is a plain apt one.
-    LATEST_VERSION=""
-    CLAUDE_DESKTOP_DEB_URL=""
-    CLAUDE_DESKTOP_CHANNEL="github"
     if apt_package_is_repo_served "$CLAUDE_DESKTOP_PKG"; then
-        if LATEST_VERSION=$(claude_desktop_apt_candidate "$CLAUDE_DESKTOP_PKG"); then
-            CLAUDE_DESKTOP_CHANNEL="apt"
-            print_status "Tracking $APP_DISPLAY_NAME through apt (package: $CLAUDE_DESKTOP_PKG)"
-            compare_and_report_versions "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_DISPLAY_NAME"
+        CLAUDE_DESKTOP_CHANNEL="apt"
+        print_status "Tracking $APP_DISPLAY_NAME through apt (package: $CLAUDE_DESKTOP_PKG)"
+        if ! claude_desktop_resolve_apt_latest; then
+            # compare_and_report_versions emits an "unknown" summary event.
+            compare_and_report_versions "$CURRENT_VERSION" "" "$APP_DISPLAY_NAME"
             VERSION_STATUS=$?
-            return 0
+            print_error "$(get_config messages.failed_latest) (package: $CLAUDE_DESKTOP_PKG)"
+            return 1
         fi
-        LATEST_VERSION=""
+        print_status "Latest version source: $CLAUDE_DESKTOP_LATEST_SOURCE"
+        compare_and_report_versions "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_DISPLAY_NAME"
+        VERSION_STATUS=$?
+        return 0
     fi
 
-    local arch
-    arch=$(dpkg --print-architecture 2>/dev/null)
-    [ -n "$arch" ] || arch="amd64"
+    # No apt source serves it, but it is Anthropic's own build: this is the
+    # documented repo-less install (/etc/default/claude-desktop setting
+    # CLAUDE_DESKTOP_ADD_REPO="false", or a .deb installed from the pool by
+    # hand), so it stays on the official pool. Falling through to the community
+    # releases here would be exactly the channel mismatch this snippet exists
+    # to prevent: those trail the official repository by a whole major version,
+    # so an official 2.x package reads as "newer than latest release" and the
+    # scan reports noise instead of an answer.
+    if claude_desktop_package_is_official "$CLAUDE_DESKTOP_PKG"; then
+        CLAUDE_DESKTOP_CHANNEL="apt-pool"
+        print_status "Tracking $APP_DISPLAY_NAME through Anthropic's package pool (package: $CLAUDE_DESKTOP_PKG, no apt source registered)"
+
+        local pool_asset
+        if pool_asset=$(claude_desktop_pool_asset "$arch"); then
+            LATEST_VERSION="${pool_asset%% *}"
+            CLAUDE_DESKTOP_DEB_URL="${pool_asset#* }"
+            CLAUDE_DESKTOP_LATEST_SOURCE="repository pool index"
+        fi
+
+        if [ -z "$LATEST_VERSION" ] || [ -z "$CLAUDE_DESKTOP_DEB_URL" ]; then
+            compare_and_report_versions "$CURRENT_VERSION" "" "$APP_DISPLAY_NAME"
+            VERSION_STATUS=$?
+            print_error "$(get_config messages.failed_latest) (package: $CLAUDE_DESKTOP_PKG, arch: $arch)"
+            return 1
+        fi
+
+        print_status "Latest version source: $CLAUDE_DESKTOP_LATEST_SOURCE"
+        compare_and_report_versions "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_DISPLAY_NAME"
+        VERSION_STATUS=$?
+        return 0
+    fi
 
     local owner repo
     owner=$(get_config repository.owner)
@@ -230,6 +441,7 @@ claude_desktop_version_check() {
         if [ -n "$asset" ]; then
             LATEST_VERSION="${asset%% *}"
             CLAUDE_DESKTOP_DEB_URL="${asset#* }"
+            CLAUDE_DESKTOP_LATEST_SOURCE="GitHub release asset"
         fi
     fi
 
@@ -371,12 +583,18 @@ perform_claude_desktop_deb_update() {
 
 # Route to the channel the installed package actually came from.
 perform_claude_desktop_update() {
-    if [ "$CLAUDE_DESKTOP_CHANNEL" = "apt" ]; then
-        perform_claude_desktop_apt_update
-        return $?
-    fi
-
-    perform_claude_desktop_deb_update
+    case "$CLAUDE_DESKTOP_CHANNEL" in
+        apt)
+            perform_claude_desktop_apt_update
+            ;;
+        *)
+            # apt-pool and github both install a downloaded .deb. Each stays on
+            # its own channel because CLAUDE_DESKTOP_DEB_URL was resolved from
+            # that channel's index - the official pool, or the community
+            # release assets.
+            perform_claude_desktop_deb_update
+            ;;
+    esac
 }
 
 update_claude_desktop() {

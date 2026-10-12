@@ -1213,18 +1213,63 @@ source_claude_desktop_functions() {
         > "$snippets_dir/update_claude_desktop.sh"
     # shellcheck disable=SC1090
     source "$snippets_dir/update_claude_desktop.sh"
+
+    # Pin apt index freshness. With a fresh index the apt candidate is the
+    # authority and no repository index is fetched, which is what the
+    # apt-channel tests below are about. Left pointing at the host's real
+    # /var/lib/apt/lists, whether these tests reach the network would depend on
+    # when the machine last ran `apt-get update`.
+    stub_apt_lists 10
 }
 
-# dpkg reports $1 installed for claude-desktop, on amd64.
+# dpkg reports $1 installed for claude-desktop, on amd64, maintained by $2
+# (Anthropic's own build unless told otherwise).
+#
+# The format string matters: the snippet asks dpkg-query for ${Version} to get
+# the installed version and for ${Maintainer} to tell Anthropic's build from
+# the community packaging, and answering both with the same string would decide
+# the channel by accident.
 stub_claude_desktop_dpkg() {
     export STUB_CD_VERSION="$1"
+    export STUB_CD_MAINTAINER="${2:-Anthropic PBC <support@anthropic.com>}"
     dpkg-query() {
-        [ "$3" = "claude-desktop" ] || return 1
-        printf '%s' "$STUB_CD_VERSION"
+        local arg fmt="" pkg=""
+        for arg in "$@"; do
+            case "$arg" in
+                -f=*) fmt="${arg#-f=}" ;;
+                -*) ;;
+                *) pkg="$arg" ;;
+            esac
+        done
+        [ "$pkg" = "claude-desktop" ] || return 1
+        case "$fmt" in
+            *Maintainer*) printf '%s' "$STUB_CD_MAINTAINER" ;;
+            *) printf '%s' "$STUB_CD_VERSION" ;;
+        esac
     }
+    # --compare-versions must reach the real dpkg: stubbing it to a bare
+    # `return 0` would make every version comparison answer "true".
     dpkg() {
-        [ "$1" = "--print-architecture" ] && echo "amd64"
+        case "$1" in
+            --print-architecture) echo "amd64" ;;
+            *) command dpkg "$@" ;;
+        esac
     }
+}
+
+# An Anthropic Packages index for the pool, listing $@ as published versions.
+stub_claude_desktop_pool_index() {
+    local versions=("$@")
+    local body="" v
+    for v in "${versions[@]}"; do
+        body+="Package: claude-desktop
+Version: $v
+Filename: pool/main/c/claude-desktop/claude-desktop_${v}_amd64.deb
+
+"
+    done
+    export STUB_CD_POOL_INDEX="$body"
+    fetch_debian_repo_index() { printf '%s\n' "$STUB_CD_POOL_INDEX"; }
 }
 
 # A release carrying the community .deb for $1, the way the API returns it.
@@ -1305,9 +1350,9 @@ stub_claude_desktop_github() {
 
 # No apt source carries it -> it came from the community .deb, and that is the
 # channel to compare against and install from.
-@test "claude-desktop: a hand-installed .deb still checks the GitHub release" {
+@test "claude-desktop: a hand-installed community .deb still checks the GitHub release" {
     source_claude_desktop_functions
-    stub_claude_desktop_dpkg "2.7032.0"
+    stub_claude_desktop_dpkg "2.7032.0" "aaddrick <packaging@example.invalid>"
     stub_apt_cache_policy "claude-desktop:
   Installed: 2.7032.0
   Candidate: 2.7032.0
@@ -1344,6 +1389,238 @@ stub_claude_desktop_github() {
     [ "$status" -eq 0 ]
     [ -f "$APT_MARKER" ]
     [ ! -f "$WGET_MARKER" ]
+}
+
+# ---------------------------------------------------------------------------
+# claude-desktop: a stale apt index must not pass for an answer
+# ---------------------------------------------------------------------------
+#
+# The regression: `apt-cache policy` is only as fresh as the last
+# `apt-get update`, and --check-only and --snippet deliberately never run one.
+# A machine five days past its last apt update reported an installed
+# 2.26454.2 as "up to date" while the repository already published 2.31226.1.
+
+@test "claude-desktop: a stale apt index is answered from the repository index" {
+    source_claude_desktop_functions
+    stub_apt_lists 86400
+    stub_claude_desktop_dpkg "2.26454.2"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.26454.2
+  Candidate: 2.26454.2
+  Version table:
+ *** 2.26454.2 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    claude_desktop_published_version() { echo "2.31226.1"; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"update_available"'* ]]
+    [[ "$output" == *'"latest_version":"2.31226.1"'* ]]
+}
+
+# The published version is only ever allowed to move the answer forward. A
+# candidate ahead of the index means another source serves the package too,
+# and that is the version apt would install.
+@test "claude-desktop: a candidate ahead of the repository index is kept" {
+    source_claude_desktop_functions
+    stub_apt_lists 86400
+    stub_claude_desktop_dpkg "2.26454.2"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.26454.2
+  Candidate: 2.40000.0
+  Version table:
+     2.40000.0 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+ *** 2.26454.2 500
+        100 /var/lib/dpkg/status"
+    claude_desktop_published_version() { echo "2.31226.1"; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"latest_version":"2.40000.0"'* ]]
+}
+
+# A held package could not be upgraded even if we reported the newer version,
+# and this snippet never reports an update it cannot apply.
+@test "claude-desktop: a held package is reported against the held candidate" {
+    source_claude_desktop_functions
+    stub_apt_lists 86400
+    stub_claude_desktop_dpkg "2.26454.2"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.26454.2
+  Candidate: 2.26454.2
+  Version table:
+ *** 2.26454.2 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    apt_package_is_held() { return 0; }
+    claude_desktop_published_version() { echo "2.31226.1"; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"up_to_date"'* ]]
+    [[ "$output" == *'"latest_version":"2.26454.2"'* ]]
+}
+
+# Unreachable repository: fall back to the candidate rather than reporting
+# "unknown", but say out loud that it may be out of date.
+@test "claude-desktop: an unreachable repository falls back to the candidate" {
+    source_claude_desktop_functions
+    stub_apt_lists 86400
+    stub_claude_desktop_dpkg "2.26454.2"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.26454.2
+  Candidate: 2.26454.2
+  Version table:
+ *** 2.26454.2 500
+        500 https://downloads.claude.ai/claude-desktop/apt/stable stable/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    claude_desktop_published_version() { return 1; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"latest_version":"2.26454.2"'* ]]
+    [[ "$output" == *"may be out of date"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# claude-desktop: the apt-pool channel
+# ---------------------------------------------------------------------------
+#
+# Anthropic documents installing the .deb without registering the repository
+# (/etc/default/claude-desktop with CLAUDE_DESKTOP_ADD_REPO="false"). No apt
+# source then serves the package, and the snippet used to fall through to the
+# community GitHub packaging - whose releases trail the official repository by
+# a whole major version, so an official 2.x build rendered as "newer than
+# latest release" instead of an answer.
+
+@test "claude-desktop: an official package with no apt source uses the pool" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2" "Anthropic PBC <support@anthropic.com>"
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.26454.2
+  Candidate: 2.26454.2
+  Version table:
+ *** 2.26454.2 100
+        100 /var/lib/dpkg/status"
+    stub_claude_desktop_pool_index "2.26454.2" "2.31226.1"
+    # The community channel must not be consulted for an official build.
+    export CURL_MARKER="$BATS_TEST_TMPDIR/curl-was-called"
+    curl() { : > "$CURL_MARKER"; return 1; }
+    export QUIET_MODE=true
+    enable_json_events
+
+    run update_claude_desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"update_available"'* ]]
+    [[ "$output" == *'"latest_version":"2.31226.1"'* ]]
+    [ ! -f "$CURL_MARKER" ]
+}
+
+@test "claude_desktop_pool_asset: builds the pool download URL for the highest version" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2"
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    stub_claude_desktop_pool_index "2.26454.2" "2.31226.1" "2.19675.1"
+
+    run claude_desktop_pool_asset "amd64"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2.31226.1 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.31226.1_amd64.deb" ]
+}
+
+# The Filename field is external input that becomes a download URL we then
+# install as root. An index that aims it off the pool must be ignored, not
+# followed (see DEFENSIVE_CODING_GUIDE).
+@test "claude_desktop_pool_asset: rejects a Filename outside the pool" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2"
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    export STUB_CD_POOL_INDEX='Package: claude-desktop
+Version: 9.9.9
+Filename: https://evil.invalid/claude-desktop_9.9.9_amd64.deb
+
+Package: claude-desktop
+Version: 2.26454.2
+Filename: pool/main/c/claude-desktop/claude-desktop_2.26454.2_amd64.deb
+'
+    fetch_debian_repo_index() { printf '%s\n' "$STUB_CD_POOL_INDEX"; }
+
+    run claude_desktop_pool_asset "amd64"
+    [ "$status" -eq 0 ]
+    [[ "$output" == "2.26454.2 "* ]]
+    [[ "$output" != *"evil.invalid"* ]]
+}
+
+@test "claude_desktop_pool_asset: rejects a Filename that walks out of the pool" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2"
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    export STUB_CD_POOL_INDEX='Package: claude-desktop
+Version: 9.9.9
+Filename: pool/../../../etc/claude-desktop_9.9.9_amd64.deb
+'
+    fetch_debian_repo_index() { printf '%s\n' "$STUB_CD_POOL_INDEX"; }
+
+    run claude_desktop_pool_asset "amd64"
+    [ "$status" -ne 0 ]
+}
+
+# A pool listing the other packaging variant must not be mistaken for ours.
+@test "claude_desktop_pool_asset: ignores a different package in the pool" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2"
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    export STUB_CD_POOL_INDEX='Package: claude-desktop-unofficial
+Version: 9.9.9
+Filename: pool/main/c/claude-desktop/claude-desktop-unofficial_9.9.9_amd64.deb
+'
+    fetch_debian_repo_index() { printf '%s\n' "$STUB_CD_POOL_INDEX"; }
+
+    run claude_desktop_pool_asset "amd64"
+    [ "$status" -ne 0 ]
+}
+
+@test "claude_desktop_pool_asset: non-zero when the pool index is unreachable" {
+    source_claude_desktop_functions
+    CLAUDE_DESKTOP_PKG="claude-desktop"
+    fetch_debian_repo_index() { return 1; }
+
+    run claude_desktop_pool_asset "amd64"
+    [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# claude_desktop_package_is_official
+# ---------------------------------------------------------------------------
+
+@test "claude_desktop_package_is_official: true for Anthropic's own build" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2" "Anthropic PBC <support@anthropic.com>"
+    run claude_desktop_package_is_official "claude-desktop"
+    [ "$status" -eq 0 ]
+}
+
+@test "claude_desktop_package_is_official: false for the community packaging" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2" "aaddrick <packaging@example.invalid>"
+    run claude_desktop_package_is_official "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+@test "claude_desktop_package_is_official: false when dpkg knows no such package" {
+    source_claude_desktop_functions
+    stub_claude_desktop_dpkg "2.26454.2"
+    run claude_desktop_package_is_official "not-installed"
+    [ "$status" -ne 0 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -1510,4 +1787,257 @@ install_fake_android_studio() {
     run update_android_studio
     [ "$status" -eq 0 ]
     [[ "$output" == *'"status":"not_installed"'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# select_highest_dpkg_version
+#
+# dpkg's ordering, not sort -V's: the apt channel compares repository versions
+# against an installed dpkg version, and sort -V gets "~" pre-releases and
+# epochs wrong in exactly that comparison.
+# ---------------------------------------------------------------------------
+
+@test "select_highest_dpkg_version: picks the highest of several versions" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' 2.26454.2 2.31226.1 2.19675.1 2.31226.0)"
+    [ "$status" -eq 0 ]
+    [ "$output" = "2.31226.1" ]
+}
+
+@test "select_highest_dpkg_version: a tilde pre-release sorts below the release" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' '1.0~rc1' '1.0')"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.0" ]
+}
+
+@test "select_highest_dpkg_version: honours a Debian revision" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' '1.2.3-1' '1.2.3-2')"
+    [ "$output" = "1.2.3-2" ]
+}
+
+@test "select_highest_dpkg_version: an epoch outranks a higher plain version" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' '9.9.9' '1:1.0')"
+    [ "$output" = "1:1.0" ]
+}
+
+# The index is fetched from a remote repository, so anything that is not a
+# plausible dpkg version is dropped rather than handed to dpkg.
+@test "select_highest_dpkg_version: drops lines that are not versions" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' 'not a version' '$(touch /tmp/pwned)' '1.0' '')"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.0" ]
+}
+
+@test "select_highest_dpkg_version: returns non-zero when nothing is a version" {
+    run select_highest_dpkg_version <<< "garbage"
+    [ "$status" -ne 0 ]
+    [ "$output" = "" ]
+}
+
+@test "select_highest_dpkg_version: tolerates surrounding whitespace" {
+    run select_highest_dpkg_version <<< "$(printf '%s\n' '  1.0  ' '2.0')"
+    [ "$output" = "2.0" ]
+}
+
+# ---------------------------------------------------------------------------
+# apt_index_age_seconds / apt_index_is_stale
+#
+# The freshness question behind the whole apt-channel fix: --check-only and
+# --snippet never run `apt-get update`, so the cached index - and the candidate
+# read from it - can be arbitrarily old.
+# ---------------------------------------------------------------------------
+
+# A fake /var/lib/apt/lists holding one cached index, aged by `touch -d`.
+stub_apt_lists() {
+    local age_seconds="${1:-0}"
+    export APT_LISTS_DIR="$BATS_TEST_TMPDIR/lists"
+    mkdir -p "$APT_LISTS_DIR"
+    local f="$APT_LISTS_DIR/downloads.claude.ai_claude-desktop_apt_stable_dists_stable_main_binary-amd64_Packages"
+    : > "$f"
+    touch -d "@$(( $(date +%s) - age_seconds ))" "$f"
+}
+
+@test "apt_index_age_seconds: reports the age of a cached index" {
+    stub_apt_lists 7200
+    run apt_index_age_seconds "downloads.claude.ai"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 7190 ]
+    [ "$output" -le 7210 ]
+}
+
+@test "apt_index_age_seconds: non-zero when no index for that host was fetched" {
+    stub_apt_lists 0
+    run apt_index_age_seconds "packages.mozilla.org"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_index_age_seconds: non-zero when given no host" {
+    stub_apt_lists 0
+    run apt_index_age_seconds ""
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_index_is_stale: a just-fetched index is fresh" {
+    stub_apt_lists 10
+    run apt_index_is_stale "downloads.claude.ai" 3600
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_index_is_stale: an index past max-age is stale" {
+    stub_apt_lists 7200
+    run apt_index_is_stale "downloads.claude.ai" 3600
+    [ "$status" -eq 0 ]
+}
+
+# A never-fetched index is the state in which the candidate deserves the least
+# trust, so it must count as stale rather than as fresh.
+@test "apt_index_is_stale: a never-fetched index counts as stale" {
+    stub_apt_lists 10
+    run apt_index_is_stale "downloads.claude.ai.other" 3600
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_index_is_stale: a non-numeric max-age falls back to the default" {
+    stub_apt_lists 10
+    run apt_index_is_stale "downloads.claude.ai" "not-a-number"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_index_is_stale: defaults max-age when none is given" {
+    stub_apt_lists 86400
+    run apt_index_is_stale "downloads.claude.ai"
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# apt_package_is_held
+# ---------------------------------------------------------------------------
+
+stub_apt_mark() {
+    STUB_BIN="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_BIN"
+    printf '#!/bin/bash\nprintf "%%s\\n" %s\n' "$1" > "$STUB_BIN/apt-mark"
+    chmod +x "$STUB_BIN/apt-mark"
+    PATH="$STUB_BIN:$PATH"
+}
+
+@test "apt_package_is_held: true when apt-mark lists the package" {
+    stub_apt_mark "'claude-desktop' 'other-pkg'"
+    PATH="$STUB_BIN:$PATH" run apt_package_is_held "claude-desktop"
+    [ "$status" -eq 0 ]
+}
+
+@test "apt_package_is_held: false when apt-mark lists nothing" {
+    stub_apt_mark "''"
+    PATH="$STUB_BIN:$PATH" run apt_package_is_held "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+# A substring match would read "claude-desktop-unofficial" as a hold on
+# "claude-desktop" and silently stop reporting its updates.
+@test "apt_package_is_held: false for a package whose name is only a prefix" {
+    stub_apt_mark "'claude-desktop-unofficial'"
+    PATH="$STUB_BIN:$PATH" run apt_package_is_held "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_package_is_held: false when given no package name" {
+    stub_apt_mark "'claude-desktop'"
+    PATH="$STUB_BIN:$PATH" run apt_package_is_held ""
+    [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# fetch_debian_repo_index / fetch_debian_repo_latest_version
+#
+# Reading the repository's own index over HTTPS is what lets a read-only scan
+# answer correctly without sudo and without `apt-get update`.
+# ---------------------------------------------------------------------------
+
+# Fake curl serving a Packages body for the plain URL, the gzipped one, or
+# neither, per STUB_INDEX_MODE.
+stub_index_curl() {
+    STUB_BIN="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_BIN"
+    cat > "$STUB_BIN/curl" <<'STUB'
+#!/bin/bash
+url="${!#}"
+case "${STUB_INDEX_MODE:-plain}" in
+    plain)  case "$url" in *.gz) exit 22 ;; esac ;;
+    gz)     case "$url" in *.gz) ;; *) exit 22 ;; esac ;;
+    none)   exit 22 ;;
+esac
+if [ "${url##*.}" = "gz" ]; then
+    printf '%s' "$STUB_INDEX_BODY" | gzip -c
+else
+    printf '%s' "$STUB_INDEX_BODY"
+fi
+STUB
+    chmod +x "$STUB_BIN/curl"
+    export STUB_INDEX_BODY='Package: claude-desktop
+Version: 2.26454.2
+Filename: pool/main/c/claude-desktop/claude-desktop_2.26454.2_amd64.deb
+
+Package: claude-desktop
+Version: 2.31226.1
+Filename: pool/main/c/claude-desktop/claude-desktop_2.31226.1_amd64.deb
+'
+}
+
+@test "fetch_debian_repo_index: returns the plain Packages body" {
+    stub_index_curl
+    STUB_INDEX_MODE=plain PATH="$STUB_BIN:$PATH" run fetch_debian_repo_index \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main amd64
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Version: 2.31226.1"* ]]
+}
+
+@test "fetch_debian_repo_index: falls back to the gzipped index" {
+    stub_index_curl
+    STUB_INDEX_MODE=gz PATH="$STUB_BIN:$PATH" run fetch_debian_repo_index \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main amd64
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Version: 2.31226.1"* ]]
+}
+
+@test "fetch_debian_repo_index: non-zero when the repository is unreachable" {
+    stub_index_curl
+    STUB_INDEX_MODE=none PATH="$STUB_BIN:$PATH" run fetch_debian_repo_index \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main amd64
+    [ "$status" -ne 0 ]
+    [ "$output" = "" ]
+}
+
+@test "fetch_debian_repo_index: non-zero when a coordinate is missing" {
+    stub_index_curl
+    PATH="$STUB_BIN:$PATH" run fetch_debian_repo_index \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main ""
+    [ "$status" -ne 0 ]
+}
+
+@test "fetch_debian_repo_latest_version: highest version the index publishes" {
+    stub_index_curl
+    STUB_INDEX_MODE=plain PATH="$STUB_BIN:$PATH" run fetch_debian_repo_latest_version \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main amd64
+    [ "$status" -eq 0 ]
+    [ "$output" = "2.31226.1" ]
+}
+
+@test "fetch_debian_repo_latest_version: non-zero when the index cannot be read" {
+    stub_index_curl
+    STUB_INDEX_MODE=none PATH="$STUB_BIN:$PATH" run fetch_debian_repo_latest_version \
+        "https://downloads.claude.ai/claude-desktop/apt/stable" stable main amd64
+    [ "$status" -ne 0 ]
+}
+
+# A trailing slash on the base URL must not produce a "//dists" path.
+@test "fetch_debian_repo_index: tolerates a trailing slash on the base URL" {
+    stub_index_curl
+    cat > "$STUB_BIN/curl" <<'STUB'
+#!/bin/bash
+printf '%s' "${!#}"
+STUB
+    chmod +x "$STUB_BIN/curl"
+    PATH="$STUB_BIN:$PATH" run fetch_debian_repo_index \
+        "https://downloads.claude.ai/claude-desktop/apt/stable/" stable main amd64
+    [ "$output" = "https://downloads.claude.ai/claude-desktop/apt/stable/dists/stable/main/binary-amd64/Packages" ]
 }
