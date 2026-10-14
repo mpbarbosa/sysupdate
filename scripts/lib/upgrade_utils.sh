@@ -5,13 +5,19 @@
 # Provides reusable functions for version checking and application updates
 # to avoid code duplication across upgrade snippet modules.
 #
-# Version: 1.2.0
-# Date: 2025-11-29
+# Version: 1.3.0
+# Date: 2026-10-12
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # License: MIT
 #
 # Version History:
+#   1.3.0 (2026-10-12) - Read-only apt version discovery that does not depend
+#                        on the freshness of the local apt index
+#                      - New functions: select_highest_dpkg_version(),
+#                        apt_index_age_seconds(), apt_index_is_stale(),
+#                        apt_package_is_held(), fetch_debian_repo_index(),
+#                        fetch_debian_repo_latest_version()
 #   1.1.0 (2025-11-29) - Added apt package manager support
 #                       - New function: get_apt_latest_version()
 #                       - Added "apt" case in config_driven_version_check()
@@ -705,6 +711,141 @@ apt_repository_is_configured() {
     done
 
     return 1
+}
+
+# True when an enabled apt source actually serves the package - i.e. apt itself
+# could install or upgrade it, so apt is a legitimate version source for it.
+#
+# `apt-cache policy` answers for any package dpkg knows about, and for one
+# installed from a hand-downloaded .deb the Candidate is simply its own
+# installed version. A snippet reading the Candidate alone would therefore call
+# such a package permanently "up to date". Only an origin line in the version
+# table ("500 https://repo ... Packages") proves a repository carries it; the
+# "100 /var/lib/dpkg/status" pin is the installed copy, not a source.
+apt_package_is_repo_served() {
+    local package="$1"
+
+    [ -n "$package" ] || return 1
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    apt-cache policy "$package" 2>/dev/null \
+        | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[a-z][a-z0-9+.-]*:'
+}
+
+# Where apt caches the repository indexes it has fetched. Overridable so the
+# suites can point the freshness check at a fixture tree.
+APT_LISTS_DIR="${APT_LISTS_DIR:-/var/lib/apt/lists}"
+
+# The highest dpkg version among those read on stdin, one per line.
+#
+# `sort -V` is close to dpkg's ordering but not the same: it has no notion of
+# an epoch and sorts the "~" pre-release marker the wrong way, so "1.0~rc1"
+# comes out above "1.0". dpkg is the only authority, and every caller here is
+# already on an apt system; sort -V stays only for the sourced-standalone case.
+#
+# The input is an external repository index, so lines that are not plausible
+# dpkg versions are dropped rather than compared (see DEFENSIVE_CODING_GUIDE).
+select_highest_dpkg_version() {
+    local line best="" have_dpkg=false
+    command -v dpkg >/dev/null 2>&1 && have_dpkg=true
+
+    while IFS= read -r line; do
+        line="${line//[[:space:]]/}"
+        [[ "$line" =~ ^[0-9][A-Za-z0-9.+:~-]*$ ]] || continue
+        if [ -z "$best" ]; then
+            best="$line"
+        elif [ "$have_dpkg" = true ]; then
+            dpkg --compare-versions "$line" gt "$best" && best="$line"
+        elif [ "$(printf '%s\n%s\n' "$best" "$line" | sort -V | tail -1)" = "$line" ]; then
+            best="$line"
+        fi
+    done
+
+    [ -n "$best" ] || return 1
+    printf '%s\n' "$best"
+}
+
+# Age in seconds of the most recently fetched apt index for a repository host.
+# Args: <host> - a hostname as it appears in the cached index filenames
+# Echoes the age; returns 1 when no index for that host has ever been fetched.
+apt_index_age_seconds() {
+    local host="$1"
+    [ -n "$host" ] || return 1
+    [ -d "$APT_LISTS_DIR" ] || return 1
+
+    # apt names each cached index after its URL with "_" for the separators, so
+    # the host survives verbatim: downloads.claude.ai_..._binary-amd64_Packages
+    local newest
+    newest=$(find "$APT_LISTS_DIR" -maxdepth 1 -type f -name "*${host}*_Packages*" \
+        -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+    [ -n "$newest" ] || return 1
+
+    local now
+    now=$(date +%s 2>/dev/null) || return 1
+    printf '%s\n' "$(( now - ${newest%.*} ))"
+}
+
+# True when the local apt index for a host is missing or older than max-age.
+# Args: <host> [max-age-seconds, default 3600]
+#
+# A never-fetched index counts as stale: that is the state in which the apt
+# candidate is least trustworthy, not the state in which to trust it.
+apt_index_is_stale() {
+    local host="$1" max_age="${2:-3600}"
+    [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=3600
+
+    local age
+    age=$(apt_index_age_seconds "$host") || return 0
+    [ "$age" -gt "$max_age" ]
+}
+
+# True when apt is holding the package back, so no upgrade could happen even if
+# the repository published a newer version. Read-only; needs no sudo.
+apt_package_is_held() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+    command -v apt-mark >/dev/null 2>&1 || return 1
+    apt-mark showhold 2>/dev/null | grep -qxF "$package"
+}
+
+# A Debian repository's own Packages index for an architecture, over HTTPS.
+# Args: <base-url> <suite> <component> <arch>
+#   e.g. https://downloads.claude.ai/claude-desktop/apt/stable stable main amd64
+# Echoes the index body; returns 1 when it cannot be read.
+#
+# This is what makes read-only discovery honest on an apt channel. The local
+# apt index is only as fresh as the last `apt-get update`, which --check-only
+# and --snippet deliberately never run, so the candidate they read can name a
+# long-superseded version as the latest. The repository index needs no sudo and
+# no apt-get update, so a read-only scan can consult the authority directly.
+fetch_debian_repo_index() {
+    local base="$1" suite="$2" component="$3" arch="$4"
+    [ -n "$base" ] && [ -n "$suite" ] && [ -n "$component" ] && [ -n "$arch" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+
+    local timeout="${SYSUPDATE_CURL_TIMEOUT:-20}"
+    local index_url="${base%/}/dists/${suite}/${component}/binary-${arch}/Packages"
+    local body
+    body=$(curl -fsSL --max-time "$timeout" "$index_url" 2>/dev/null)
+
+    # Some repositories publish only the compressed index.
+    if [ -z "$body" ] && command -v gzip >/dev/null 2>&1; then
+        body=$(curl -fsSL --max-time "$timeout" "${index_url}.gz" 2>/dev/null \
+            | gzip -cd 2>/dev/null)
+    fi
+
+    [ -n "$body" ] || return 1
+    printf '%s\n' "$body"
+}
+
+# The highest version a Debian repository publishes for an architecture.
+# Args: as fetch_debian_repo_index; echoes the version, returns 1 on failure.
+fetch_debian_repo_latest_version() {
+    local index
+    index=$(fetch_debian_repo_index "$@") || return 1
+    printf '%s\n' "$index" \
+        | awk '/^Version:[[:space:]]/ { print $2 }' \
+        | select_highest_dpkg_version
 }
 
 #=============================================================================

@@ -43,7 +43,10 @@ A plain Node.js HTTP + WebSocket server (no framework). It:
 
 - Spawns `scripts/system_update.sh --json-events` (or with `--check-only`, `--snippet <id>`) as a child process.
 - Reads JSON events from the CLI's **stderr** (the `--json-events` flag routes structured events there); stdout lines are forwarded as raw terminal output.
-- Maintains an in-memory `currentRun` state machine: `starting → running → completed/failed`.
+- Maintains an in-memory `currentRun` state machine: `starting → running → completed/failed`, with
+  `paused` (suspended by the dashboard) and `stopped` (interrupted by the dashboard) as the two
+  states the run controls add. `stopped` is deliberately distinct from `failed`: the run did what
+  was asked of it.
 - Broadcasts `snapshot` and `cli.event` WebSocket messages to all connected frontend clients on every event.
 - Reads persisted log history from `~/.local/state/sysupdate/run-history.jsonl` (JSONL format).
 
@@ -52,7 +55,13 @@ Key env vars for the backend:
 - `SYSUPDATE_LOG_FILE` — path to the JSONL run-history log
 - `SYSUPDATE_LOG_LIMIT` — max log entries returned (default 50)
 
-REST endpoints: `GET /api/health`, `GET /api/bootstrap`, `GET /api/logs`, `GET /api/runs/current`, `POST /api/runs/check-only`, `POST /api/runs/upgrade`.
+REST endpoints: `GET /api/health`, `GET /api/bootstrap`, `GET /api/logs`, `GET /api/runs/current`, `POST /api/runs/check-only`, `POST /api/runs/upgrade`, `POST /api/runs/pause`, `POST /api/runs/resume`, `POST /api/runs/stop`.
+
+The run controls in the top bar drive the last three. The CLI is spawned `detached`, so it leads its
+own process group and a signal reaches apt/sudo/make rather than only the Bash orchestrator: pause is
+`SIGSTOP` to `-pid`, resume `SIGCONT`, stop `SIGTERM` escalating to `SIGKILL` after
+`SYSUPDATE_STOP_GRACE_MS` (default 5000). Stopping a paused run wakes it first, because a suspended
+process cannot act on `SIGTERM`.
 
 `POST /api/shutdown` stops the bridge process: it broadcasts a `bridge.shutdown` WebSocket message, answers `202 { shuttingDown: true }`, then closes the servers and exits 0. While a run is active it answers `409` unless the body carries `{ "force": true }`, which also SIGTERMs the child CLI. The top bar's power button uses it (after an inline confirmation), then calls `window.close()`; browsers only honour that for script-opened or single-history tabs, so `ShutdownScreen` is rendered as the fallback. `run_app.sh` watches the backend and stops the Vite dev server when it exits — a dev server started by hand stays up.
 

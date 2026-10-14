@@ -86,9 +86,15 @@ export interface BackendSummaryEvent {
   [key: string]: string | number | boolean | undefined;
 }
 
+/**
+ * `paused` is a live run suspended with SIGSTOP; `stopped` is one the dashboard
+ * interrupted on purpose, as opposed to the `failed` of a run that broke.
+ */
+export type BackendRunStatus = 'starting' | 'running' | 'paused' | 'stopped' | 'completed' | 'failed';
+
 export interface BackendRunSnapshot {
   id: string;
-  status: 'starting' | 'running' | 'completed' | 'failed';
+  status: BackendRunStatus;
   args: string[];
   command: string;
   startedAt: string;
@@ -99,6 +105,7 @@ export interface BackendRunSnapshot {
   prompt: BackendRunPrompt | null;
   lastLogEntry: Record<string, unknown> | null;
   sudoPrompt?: BackendSudoPrompt | null;
+  pausedAt?: string | null;
   terminalLines: BackendTerminalLine[];
   summaries: BackendSummaryEvent[];
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { SystemConfig, ViewName } from '../types';
+import type { BackendRunStatus, SystemConfig, ViewName } from '../types';
 import { getActionToneColor, getThemeColorHex } from '../theme';
+import { getRunControlState } from '../runControls';
 
 const VIEWS: { id: ViewName; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -14,8 +15,14 @@ interface TopAppBarProps {
   onViewChange: (view: ViewName) => void;
   onRefresh: () => void;
   onRunAll: () => void;
+  /** Interrupt the run in progress (SIGTERM, then SIGKILL after a grace period). */
+  onStop: () => void;
+  /** Suspend the run in progress, or resume it if already suspended. */
+  onTogglePause: () => void;
   /** Stop the backend bridge and try to close this tab. Already confirmed by the user. */
   onShutdown: () => void;
+  /** Status of the bridge's current run; null when no run has started. */
+  runStatus: BackendRunStatus | null;
   isProcessing: boolean;
   progress: number;
   pendingTotal: number;
@@ -28,7 +35,10 @@ export default function TopAppBar({
   onViewChange,
   onRefresh,
   onRunAll,
+  onStop,
+  onTogglePause,
   onShutdown,
+  runStatus,
   isProcessing,
   progress,
   pendingTotal,
@@ -41,6 +51,10 @@ export default function TopAppBar({
   // Shutdown is not undoable from the page, so it needs a second click. The
   // browser's confirm() would do, but an inline prompt keeps the HUD look.
   const [confirmingShutdown, setConfirmingShutdown] = useState(false);
+  // The controls stay mounted and go dim between runs: unmounting them would
+  // shift Run All and the power button sideways every time a run starts.
+  const runControls = getRunControlState(runStatus);
+  const warningColor = getActionToneColor('warning', themeColor);
 
   return (
     <header className="border-b border-hud-border bg-hud-panel/60">
@@ -97,6 +111,43 @@ export default function TopAppBar({
             aria-label="Refresh"
           >
             ⟳
+          </button>
+
+          <button
+            type="button"
+            onClick={onTogglePause}
+            disabled={!runControls.canToggle}
+            className="rounded border px-2.5 py-1.5 text-sm disabled:opacity-40"
+            style={
+              runControls.canToggle
+                ? { borderColor: warningColor, color: warningColor }
+                : { borderColor: '#1e2d35', color: '#7d97a3' }
+            }
+            aria-label={runControls.toggleLabel}
+            aria-pressed={runControls.isPaused}
+            title={
+              runControls.isPaused
+                ? 'Resume the suspended run'
+                : 'Suspend the run — downloads in flight may time out while paused'
+            }
+          >
+            {runControls.isPaused ? '▶' : '⏸'}
+          </button>
+
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={!runControls.canStop}
+            className="rounded border px-2.5 py-1.5 text-sm disabled:opacity-40"
+            style={
+              runControls.canStop
+                ? { borderColor: dangerColor, color: dangerColor }
+                : { borderColor: '#1e2d35', color: '#7d97a3' }
+            }
+            aria-label="Stop run"
+            title="Interrupt the run — a package manager stopped mid-transaction may need repair"
+          >
+            ■
           </button>
 
           <button

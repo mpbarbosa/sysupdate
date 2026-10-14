@@ -1,23 +1,42 @@
 # Claude Desktop (Linux) Update Configuration
 #
-# Version: 0.1.0-alpha
-# Date: 2026-07-07
+# Version: 0.3.0-alpha
+# Date: 2026-10-12
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
-# Claude Desktop has no official Linux build; this snippet targets the
-# community packaging project aaddrick/claude-desktop-debian, which publishes
-# GitHub releases with prebuilt .deb assets.
+# Claude Desktop reaches Linux two ways, and the snippet follows whichever one
+# installed the package: Anthropic's own apt repository
+# (downloads.claude.ai/claude-desktop/apt), or the community packaging project
+# aaddrick/claude-desktop-debian, which publishes GitHub releases with prebuilt
+# .deb assets. The GitHub keys below only apply on the latter channel.
 #
 # Version History:
+#   0.3.0-alpha (2026-10-12) - Resolve the latest version from the repository's
+#                              own Packages index when the local apt index is
+#                              stale, so read-only discovery (--check-only,
+#                              --snippet) stops reporting a superseded
+#                              candidate as the latest version
+#                            - Recognise the documented repo-less install
+#                              (CLAUDE_DESKTOP_ADD_REPO="false") as the
+#                              apt-pool channel instead of falling through to
+#                              the community GitHub packaging
+#                            - install_help now carries the documented
+#                              repository setup commands, which actually work
+#   0.2.0-alpha (2026-10-06) - Follow the install channel: apt candidate when an
+#                              apt source serves the package, GitHub release
+#                              asset otherwise. The community releases trail
+#                              Anthropic's repository, so checking an
+#                              apt-installed package against GitHub reported it
+#                              as newer than the latest release
 #   0.1.0-alpha (2026-07-07) - Initial alpha version
 #                            - Current version from the installed dpkg package
 #                            - Latest version + download URL from the matching
 #                              GitHub release .deb asset (install channel and
 #                              version source are the same artifact)
 #
-# Reference: https://github.com/aaddrick/claude-desktop-debian
+# References: https://github.com/aaddrick/claude-desktop-debian
 
 # Application identifiers
 application:
@@ -25,7 +44,30 @@ application:
   command: "claude-desktop"
   display_name: "Claude Desktop"
 
-# Community packaging project that publishes the .deb releases
+# Anthropic's own apt repository - the documented install and update channel
+# (https://code.claude.com/docs/en/desktop-linux). Its Packages index is public
+# and readable over HTTPS, which is how the apt and apt-pool channels resolve a
+# latest version without sudo and without running `apt-get update`.
+#
+# index_max_age_seconds is how long the locally cached apt index is trusted as
+# the authority. Within it the apt candidate wins, because the candidate also
+# accounts for pinning and apt preferences - it is what an upgrade would really
+# install. Past it the cached index is no longer evidence of anything.
+apt_repository:
+  host: "downloads.claude.ai"
+  base_url: "https://downloads.claude.ai/claude-desktop/apt/stable"
+  suite: "stable"
+  component: "main"
+  index_max_age_seconds: 3600
+  # dpkg Maintainer substring that identifies Anthropic's own build, as opposed
+  # to the community packaging. Decides the channel when no apt source serves
+  # the package: an official package installed from a downloaded .deb stays on
+  # the official pool rather than being compared against community releases.
+  official_maintainer: "Anthropic"
+
+# Community packaging project that publishes the .deb releases. Consulted only
+# on the github channel - when no apt source serves the installed package and
+# it is not Anthropic's own build.
 repository:
   owner: "aaddrick"
   repo: "claude-desktop-debian"
@@ -34,17 +76,40 @@ repository:
 messages:
   checking_updates: "Checking Claude Desktop updates..."
   install_help: |
-    Claude Desktop (Linux) is provided by the community project
-    aaddrick/claude-desktop-debian. Install the .deb from the latest release:
+    Anthropic publishes Claude Desktop for Linux from its own apt repository.
+    Register it once and updates then arrive with regular package updates
+    (https://code.claude.com/docs/en/desktop-linux):
+
+      sudo apt install curl gnupg
+      sudo curl -fsSLo /usr/share/keyrings/claude-desktop-archive-keyring.asc \
+        https://downloads.claude.ai/claude-desktop/key.asc
+      gpg --show-keys /usr/share/keyrings/claude-desktop-archive-keyring.asc
+      echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/claude-desktop-archive-keyring.asc] https://downloads.claude.ai/claude-desktop/apt/stable stable main" \
+        | sudo tee /etc/apt/sources.list.d/claude-desktop.list
+      sudo apt update && sudo apt install claude-desktop
+
+    Verify the key before continuing: gpg should print the fingerprint
+    31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE. A missing or wrong key makes
+    `apt update` fail with NO_PUBKEY BAA929FF1A7ECACE.
+
+    Requires Ubuntu 22.04+ or Debian 12+ on amd64 or arm64; the repository
+    publishes no other architectures.
+
+    To install without registering the repository, fetch the newest .deb from
+    the repository pool and install that instead. Note that apt then delivers
+    no new versions - updating means repeating these two commands:
+
+      curl -fLO "https://downloads.claude.ai/claude-desktop/apt/stable/$(curl -s "https://downloads.claude.ai/claude-desktop/apt/stable/dists/stable/main/binary-$(dpkg --print-architecture)/Packages" | grep '^Filename: pool/main/c/claude-desktop/claude-desktop_' | sort -V | tail -n 1 | cut -d' ' -f2)"
+      sudo apt install ./claude-desktop_*.deb
+
+    The .deb registers the repository itself unless /etc/default/claude-desktop
+    sets CLAUDE_DESKTOP_ADD_REPO="false".
+
+    A community project, aaddrick/claude-desktop-debian, also packages its own
+    .deb. It is unaffiliated with Anthropic and its releases trail the official
+    repository, so prefer the above:
 
       https://github.com/aaddrick/claude-desktop-debian/releases/latest
-
-    e.g. (amd64):
-      url=$(curl -fsSL https://api.github.com/repos/aaddrick/claude-desktop-debian/releases/latest \
-            | grep -oE '"browser_download_url": *"[^"]+claude-desktop_[0-9][^"]*_amd64\.deb"' \
-            | sed -E 's/.*"(https[^"]+)"/\1/')
-      wget -O claude-desktop.deb "$url"
-      sudo dpkg -i claude-desktop.deb && sudo apt-get install -f -y
   failed_version: "Failed to determine the installed Claude Desktop version"
   failed_latest: "Failed to determine the latest Claude Desktop release"
   update_success: "Claude Desktop updated successfully"
@@ -52,6 +117,10 @@ messages:
   installing: "Installing Claude Desktop..."
 
 # Update configuration
+# fix_dependencies/output_lines apply to the github channel, where the snippet
+# downloads and dpkg -i's the release asset itself. On the apt channel the
+# upgrade is a plain `apt-get install --only-upgrade`, which resolves its own
+# dependencies.
 update:
   fix_dependencies: "apt-get install -f -y"
   output_lines: 20

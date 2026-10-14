@@ -11,7 +11,7 @@
 import { before, after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -343,6 +343,151 @@ describe('sudo askpass relay', { concurrency: false }, () => {
     assert.strictEqual(bad.status, 400);
     const unknown = await answerSudo({ requestId: 'sudo-nope', password: 'x' });
     assert.strictEqual(unknown.status, 404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Run controls — pause/resume/stop signal the CLI's whole process group
+// ---------------------------------------------------------------------------
+
+const postControl = (route) => fetch(`${BASE}/api/runs/${route}`, { method: 'POST' });
+
+const waitForSettled = () =>
+  waitFor(
+    (run) => run.status === 'completed' || run.status === 'failed' || run.status === 'stopped',
+    'run to settle',
+  );
+
+/** Linux process state letter from /proc/<pid>/stat — 'T' once SIGSTOP lands. */
+function processState(pid) {
+  // The comm field can contain spaces and parentheses; state is the first
+  // field after the closing paren.
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+}
+
+function childPidsOf(parentPid) {
+  return readdirSync('/proc')
+    .filter((entry) => /^\d+$/.test(entry))
+    .filter((entry) => {
+      try {
+        const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+        return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === parentPid;
+      } catch {
+        return false;
+      }
+    })
+    .map(Number);
+}
+
+async function startSlowRun() {
+  const res = await fetch(`${BASE}/api/runs/check-only`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snippetId: 'slow' }),
+  });
+  assert.strictEqual(res.status, 202);
+  return waitFor((run) => run.status === 'running', 'the slow run to report running');
+}
+
+describe('run controls — idle bridge', { concurrency: false }, () => {
+  it('refuses pause, resume and stop with no run in progress → 409', async () => {
+    for (const route of ['pause', 'resume', 'stop']) {
+      const res = await postControl(route);
+      assert.strictEqual(res.status, 409, `${route} should be 409 when idle`);
+      assert.match((await res.json()).error, /no sysupdate run is in progress/i);
+    }
+  });
+});
+
+describe('POST /api/runs/pause and /resume', { concurrency: false }, () => {
+  it('suspends the whole process group and resumes it', async () => {
+    const started = await startSlowRun();
+
+    const paused = await postControl('pause');
+    assert.strictEqual(paused.status, 202);
+    assert.strictEqual((await paused.json()).run.status, 'paused');
+
+    const snapshot = await currentRun();
+    assert.strictEqual(snapshot.status, 'paused');
+    assert.ok(snapshot.pausedAt, 'a paused run should carry pausedAt');
+    assert.ok(
+      messages(snapshot).some((text) => text.includes('Run paused')),
+      'the pause should be reported in the terminal',
+    );
+
+    // The point of the detached process group: the CLI's children are
+    // suspended too, not just the Bash process the bridge spawned.
+    if (process.platform === 'linux') {
+      assert.strictEqual(processState(started.pid), 'T', 'the CLI process should be stopped');
+      const children = childPidsOf(started.pid);
+      assert.ok(children.length > 0, 'the slow stub should have a sleep child');
+      for (const child of children) {
+        assert.strictEqual(processState(child), 'T', `child ${child} should be stopped too`);
+      }
+    }
+
+    // Pausing twice is idempotent rather than an error.
+    const again = await postControl('pause');
+    assert.strictEqual(again.status, 200);
+    assert.strictEqual((await again.json()).run.status, 'paused');
+
+    const resumed = await postControl('resume');
+    assert.strictEqual(resumed.status, 202);
+    assert.strictEqual((await resumed.json()).run.status, 'running');
+    assert.strictEqual((await currentRun()).pausedAt, null);
+    if (process.platform === 'linux') {
+      assert.notStrictEqual(processState(started.pid), 'T', 'the CLI process should be running again');
+    }
+
+    // Resuming a run that is not paused is a no-op, not a 409.
+    const noop = await postControl('resume');
+    assert.strictEqual(noop.status, 200);
+
+    await postControl('stop');
+    await waitForSettled();
+  });
+});
+
+describe('POST /api/runs/stop', { concurrency: false }, () => {
+  it('interrupts the run and reports stopped rather than failed', async () => {
+    const started = await startSlowRun();
+
+    const res = await postControl('stop');
+    assert.strictEqual(res.status, 202);
+
+    const settled = await waitForSettled();
+    assert.strictEqual(settled.status, 'stopped', 'a requested interrupt is not a failure');
+    assert.ok(settled.completedAt, 'a stopped run should be timestamped');
+    assert.ok(
+      messages(settled).some((text) => text.includes('Stop requested')),
+      'the stop should be reported in the terminal',
+    );
+    // SIGTERM reached the group, so the stub never got to emit run.completed.
+    assert.ok(
+      !messages(settled).some((text) => text.includes('build-line-')),
+      'the interrupted run should not have continued',
+    );
+
+    if (process.platform === 'linux') {
+      assert.strictEqual(childPidsOf(started.pid).length, 0, 'no child of the CLI should survive the stop');
+    }
+  });
+
+  it('stops a paused run, which cannot act on SIGTERM until it is woken', async () => {
+    await startSlowRun();
+    assert.strictEqual((await postControl('pause')).status, 202);
+
+    const res = await postControl('stop');
+    assert.strictEqual(res.status, 202);
+
+    const settled = await waitForSettled();
+    assert.strictEqual(settled.status, 'stopped');
+  });
+
+  it('is refused once the run has already settled → 409', async () => {
+    const res = await postControl('stop');
+    assert.strictEqual(res.status, 409);
   });
 });
 
