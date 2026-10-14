@@ -254,23 +254,48 @@ else
     echo "Web app did not become ready in time. Open it manually at: $APP_URL"
 fi
 
-# Foreground while the dev server this script started is alive. Also leave when
-# the backend goes away — the dashboard's shut-down button stops the backend
-# only, and leaving the dev server orphaned would keep serving a dead app. The
-# EXIT trap then kills whatever this script started. If the dev server was
-# already running, there's nothing of ours to wait on — the servers keep running
-# independently and the script exits after opening the browser.
-wait_for_shutdown() {
-    while kill -0 "$DEV_PID" 2>/dev/null; do
-        if [ -n "$BACKEND_PID" ]; then
-            kill -0 "$BACKEND_PID" 2>/dev/null || { echo "Backend stopped; shutting down the dev server."; return; }
-        else
-            port_in_use "$BACKEND_PORT" "$BACKEND_HOST" || { echo "Backend stopped; shutting down the dev server."; return; }
+# True when the backend is gone: the one we started has exited, or — when we
+# reused someone else's — nothing is listening on its port any more.
+backend_stopped() {
+    if [ -n "$BACKEND_PID" ]; then
+        if kill -0 "$BACKEND_PID" 2>/dev/null; then
+            return 1
         fi
+        return 0
+    fi
+
+    if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
+        return 1
+    fi
+    return 0
+}
+
+# Foreground while anything this script started is still alive, because the EXIT
+# trap stops those services: returning early would kill them immediately. We
+# leave when the dev server we started dies, or when the backend goes away — the
+# dashboard's shut-down button stops the backend only, and leaving a dev server
+# we started orphaned would keep serving a dead app. When both servers were
+# already running there is nothing of ours to wait on, so the script exits after
+# opening the browser and leaves them alone.
+wait_for_shutdown() {
+    while :; do
+        if [ -n "$DEV_PID" ] && ! kill -0 "$DEV_PID" 2>/dev/null; then
+            return
+        fi
+
+        if backend_stopped; then
+            if [ -n "$DEV_PID" ]; then
+                echo "Backend stopped; shutting down the dev server."
+            else
+                echo "Backend stopped."
+            fi
+            return
+        fi
+
         sleep 1
     done
 }
 
-if [ -n "$DEV_PID" ]; then
+if [ -n "$DEV_PID" ] || [ -n "$BACKEND_PID" ]; then
     wait_for_shutdown
 fi
