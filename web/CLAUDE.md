@@ -63,6 +63,16 @@ own process group and a signal reaches apt/sudo/make rather than only the Bash o
 `SYSUPDATE_STOP_GRACE_MS` (default 5000). Stopping a paused run wakes it first, because a suspended
 process cannot act on `SIGTERM`.
 
+`run_app.sh` reuses an existing server on either port only after verifying its identity, never on
+occupancy alone: the app port must serve the `<meta name="sysupdate-app">` marker from
+`index.html` (checked without the backend, which may still be starting), and the backend port must
+answer `GET /api/health` with `"backend":"sysupdate-local-bridge"`. A foreign listener on either
+port aborts the launch with a message naming the port and the override variable — adopting one
+previously pointed the browser at another repo's Vite app while our backend sat unused. Under `-i`
+the backend is restarted by killing the pid holding the verified port (`lsof`/`ss`), falling back to
+`pkill -f backend/server.js` only when neither is installed. If you change the marker, change both
+`index.html` and `APP_IDENTITY_MARKER` in `run_app.sh`.
+
 `POST /api/shutdown` stops the bridge process: it broadcasts a `bridge.shutdown` WebSocket message, answers `202 { shuttingDown: true }`, then closes the servers and exits 0. While a run is active it answers `409` unless the body carries `{ "force": true }`, which also SIGTERMs the child CLI. The top bar's power button uses it (after an inline confirmation), then calls `window.close()`; browsers only honour that for script-opened or single-history tabs, so `ShutdownScreen` is rendered as the fallback. `run_app.sh` watches the backend and stops the Vite dev server when it exits — a dev server started by hand stays up.
 
 ### Frontend (`src/`)

@@ -43,6 +43,13 @@ opens the app in your browser at `http://127.0.0.1:5173` by default. You can ove
 binding and browser URL with `SYSUPDATE_WEB_APP_HOST`, `SYSUPDATE_WEB_APP_PORT`, and
 `SYSUPDATE_WEB_APP_URL`.
 
+If either port is already taken, the script reuses the existing server only when that server
+identifies itself as this project: the app port must serve the dashboard's `<meta name="sysupdate-app">`
+marker, and the backend port must answer `GET /api/health` as `sysupdate-local-bridge`. Anything
+else is an error rather than a silent reuse — otherwise an unrelated project's dev server on the
+same port would be adopted and opened in your browser. Free the port, or move this app with
+`SYSUPDATE_WEB_APP_PORT` / `SYSUPDATE_WEB_PORT`.
+
 ## Build
 
 ```bash
