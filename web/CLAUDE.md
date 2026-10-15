@@ -72,6 +72,11 @@ previously pointed the browser at another repo's Vite app while our backend sat 
 the backend is restarted by killing the pid holding the verified port (`lsof`/`ss`), falling back to
 `pkill -f backend/server.js` only when neither is installed. If you change the marker, change both
 `index.html` and `APP_IDENTITY_MARKER` in `run_app.sh`.
+`tests/integration/launcher_port_reuse.bats` covers these decisions — reuse, both abort paths, the
+no-retry-on-a-served-answer rule, and the EXIT trap stopping a backend the aborted run had already
+spawned. It reaches the probe helpers by sourcing the launcher with
+`SYSUPDATE_RUN_APP_DEFINE_ONLY=1`, which returns before the trap and the build; that flag exists for
+the suite and the launcher never sets it.
 
 `POST /api/shutdown` stops the bridge process: it broadcasts a `bridge.shutdown` WebSocket message, answers `202 { shuttingDown: true }`, then closes the servers and exits 0. While a run is active it answers `409` unless the body carries `{ "force": true }`, which also SIGTERMs the child CLI. The top bar's power button uses it (after an inline confirmation), then calls `window.close()`; browsers only honour that for script-opened or single-history tabs, so `ShutdownScreen` is rendered as the fallback. `run_app.sh` watches the backend and stops the Vite dev server when it exits — a dev server started by hand stays up.
 

@@ -6,10 +6,12 @@ on:
     paths:
       - 'scripts/**'
       - 'tests/bash/**'
+      - 'web/run_app.sh'
   pull_request:
     paths:
       - 'scripts/**'
       - 'tests/bash/**'
+      - 'web/run_app.sh'
 
 jobs:
   lint:
@@ -28,6 +30,7 @@ jobs:
           bash -n scripts/system_update.sh
           bash -n scripts/lib/*.sh
           bash -n scripts/upgrade_snippets/*.sh
+          bash -n web/run_app.sh
 
       - name: ShellCheck
         # SC1091: dynamic source paths that can't be followed statically — known
@@ -40,7 +43,8 @@ jobs:
             --exclude=SC1091,SC2034 \
             scripts/system_update.sh \
             scripts/lib/*.sh \
-            scripts/upgrade_snippets/*.sh
+            scripts/upgrade_snippets/*.sh \
+            web/run_app.sh
 
   test:
     name: BATS unit tests
