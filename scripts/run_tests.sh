@@ -12,7 +12,7 @@
 # run_tests.sh in the sibling `scripts` repo.
 #
 # Suites (in order, mirroring the three CI workflows):
-#   1. bash -n syntax check + ShellCheck        (ci-bash: lint)
+#   1. bash -n syntax check + ShellCheck        (ci-bash: lint; incl. run_app.sh)
 #   2. bats tests/bash/                          (ci-bash: test)
 #   3. bats tests/integration/                   (ci-integration: cli)
 #   4. node --test tests/backend/server.test.mjs (ci-integration: backend)
@@ -101,7 +101,8 @@ require() {
 suite_syntax() {
     require bash "bash -n" || return 1
     local rc=0 script
-    for script in scripts/system_update.sh scripts/lib/*.sh scripts/upgrade_snippets/*.sh; do
+    for script in scripts/system_update.sh scripts/lib/*.sh scripts/upgrade_snippets/*.sh \
+                  web/run_app.sh; do
         [ -f "$script" ] || continue
         if ! bash -n "$script"; then
             printf '%b   syntax error: %s%b\n' "$RED" "$script" "$NC"
@@ -118,7 +119,8 @@ suite_shellcheck() {
         --exclude=SC1091,SC2034 \
         scripts/system_update.sh \
         scripts/lib/*.sh \
-        scripts/upgrade_snippets/*.sh
+        scripts/upgrade_snippets/*.sh \
+        web/run_app.sh
 }
 
 # Resolve a runnable `bats`. bats is commonly installed as an npm global under a
@@ -194,7 +196,7 @@ printf 'suites: bash=%s integration=%s web=%s\n' "$RUN_BASH" "$RUN_INTEGRATION" 
 
 if [ "$RUN_BASH" = true ]; then
     run_suite "bash -n syntax check"          suite_syntax
-    run_suite "ShellCheck (lib + snippets)"   suite_shellcheck
+    run_suite "ShellCheck (lib + snippets + launcher)" suite_shellcheck
     run_suite "BATS unit (tests/bash)"        suite_bats_unit
 fi
 

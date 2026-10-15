@@ -6,12 +6,16 @@ on:
     paths:
       - 'scripts/**'
       - 'web/backend/**'
+      - 'web/run_app.sh'
+      - 'web/index.html'
       - 'tests/integration/**'
       - 'tests/backend/**'
   pull_request:
     paths:
       - 'scripts/**'
       - 'web/backend/**'
+      - 'web/run_app.sh'
+      - 'web/index.html'
       - 'tests/integration/**'
       - 'tests/backend/**'
 
@@ -25,9 +29,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
+        # lsof: the launcher suite asks which pid holds a port, the same way
+        # run_app.sh does, to prove no second server was started.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bats
+          sudo apt-get install -y bats lsof
 
       - name: Run CLI integration tests
         run: bats tests/integration/

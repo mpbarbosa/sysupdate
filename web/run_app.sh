@@ -247,6 +247,19 @@ ensure_process_running() {
     fi
 }
 
+# Test seam. `SYSUPDATE_RUN_APP_DEFINE_ONLY=1 source run_app.sh` stops here with
+# only the helpers above defined, so the port-identity probes can be exercised
+# directly (tests/integration/launcher_port_reuse.bats) instead of inferred from
+# a full launch. Nothing below this line — no trap, no build, no service — runs
+# under the flag, and the launcher never sets it itself, so an ordinary run
+# finds it unset and falls straight through.
+if [ -n "${SYSUPDATE_RUN_APP_DEFINE_ONLY:-}" ]; then
+    # `return` works when sourced (how the tests use this) and fails when the
+    # file was executed, where `exit` is the right way out.
+    # shellcheck disable=SC2317  # reached when `return` fails, i.e. not sourced
+    return 0 2>/dev/null || exit 0
+fi
+
 trap cleanup EXIT INT TERM
 
 # Refuse to run as root. A root build writes root-owned artifacts into dist/,
