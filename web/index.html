@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>sysupdate</title>
+    <!-- Identity marker. run_app.sh probes the app port for this before reusing
+         a server it finds there, so it never adopts an unrelated project's dev
+         server and opens the browser onto that app. Keep the attribute spelling
+         in sync with APP_IDENTITY_MARKER in run_app.sh. -->
+    <meta name="sysupdate-app" content="dashboard" />
   </head>
   <body>
     <div id="root"></div>

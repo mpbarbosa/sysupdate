@@ -14,6 +14,12 @@ Three test suites live here:
 - `setup()` in BATS: source the module under test, `export NO_COLOR=1`, set `REPO_ROOT`
 - Integration tests use `SYSUPDATE_SNIPPETS_DIR` to point at `tests/integration/fixtures/snippets/` — never real snippets
 - Backend tests use `SYSUPDATE_SCRIPT_PATH` to point at `tests/backend/fixtures/stub_script.sh` — never the real script
+- `tests/integration/launcher_port_reuse.bats` drives `web/run_app.sh` against fake listeners
+  (`python3 -m http.server`) on ports it asks the kernel for — never 5173/5174/4174, which are
+  routinely busy on a developer's machine. It shadows `npm` and the browser openers with stubs on
+  `PATH`, runs a *copy* of the launcher (the real one clears `web/dist/` in its own directory), and
+  sources the launcher with `SYSUPDATE_RUN_APP_DEFINE_ONLY=1` to reach the probe helpers alone.
+  It needs no root, so the launcher's `-i` path stays out of scope
 - Fixture snippets call `compare_and_report_versions` with hardcoded versions — no network calls
 - Capture JSON events (stderr only): `run bash -c "CMD 2>&1 1>/dev/null"`
 - Validate JSON lines via stdin pipe: `echo "$line" | python3 -c "import json,sys; json.loads(sys.stdin.read())"`

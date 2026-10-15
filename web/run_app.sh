@@ -7,6 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOST="${SYSUPDATE_WEB_APP_HOST:-127.0.0.1}"
 APP_PORT="${SYSUPDATE_WEB_APP_PORT:-5173}"
 APP_URL="${SYSUPDATE_WEB_APP_URL:-http://${APP_HOST}:${APP_PORT}}"
+# Address we probe when deciding whether an existing listener may be reused. It
+# follows the bind address rather than SYSUPDATE_WEB_APP_URL, which may point at
+# a proxy or a sub-path and so says nothing about who holds this port.
+APP_PROBE_URL="http://${APP_HOST}:${APP_PORT}/"
+# Marker served in this project's index.html (dev, preview and production
+# builds alike). Keep in sync with the <meta> tag in web/index.html.
+APP_IDENTITY_MARKER='name="sysupdate-app"'
 # Backend bridge bind address — must match backend/server.js defaults so we can
 # detect an already-running backend before spawning a second one.
 BACKEND_HOST="${SYSUPDATE_WEB_HOST:-127.0.0.1}"
@@ -43,6 +50,11 @@ Environment variables:
                              (default: http://\${APP_HOST}:\${APP_PORT})
 
 Notes:
+    • An existing server on either port is reused only if it identifies itself
+      as this project (the app port must serve the dashboard's marker; the
+      backend port must answer GET /api/health as the sysupdate bridge).
+      Anything else is an error — pick another port with
+      SYSUPDATE_WEB_APP_PORT / SYSUPDATE_WEB_PORT, or free the one in use.
     • Must NOT be run as root — a root build writes root-owned files into
       dist/ that later non-root builds cannot remove.
     • Backend bridge configuration (SYSUPDATE_WEB_HOST/PORT, SYSUPDATE_LOG_FILE,
@@ -168,6 +180,61 @@ port_in_use() {
     (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null
 }
 
+# True when <url> answers and its body contains <marker>. Occupancy is not
+# identity: a bare port check once made this script adopt an unrelated project's
+# Vite server and open the browser onto that app, so every reuse decision asks
+# the listener what it is. A server that answers with something else is reported
+# false immediately; only connection errors are retried, since a server that has
+# just bound its port may need a moment.
+response_contains() {
+    local url="$1"
+    local marker="$2"
+    local attempts="${3:-3}"
+    local body
+
+    while [ "$attempts" -gt 0 ]; do
+        if body="$(curl --silent --fail --max-time 3 "$url" 2>/dev/null)"; then
+            case "$body" in
+                *"$marker"*) return 0 ;;
+                *) return 1 ;;
+            esac
+        fi
+
+        attempts=$((attempts - 1))
+        sleep 1
+    done
+
+    return 1
+}
+
+# Identity of the app-port listener: this project's index.html carries a marker
+# meta tag. Deliberately independent of the backend, which may not be up yet.
+is_sysupdate_dev_server() {
+    response_contains "$APP_PROBE_URL" "$APP_IDENTITY_MARKER"
+}
+
+# Identity of the backend-port listener: only our bridge names itself in
+# /api/health, and that route needs no run in progress.
+is_sysupdate_backend() {
+    response_contains "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" '"sysupdate-local-bridge"'
+}
+
+# PID of whatever listens on TCP <port>, when we can learn it. Prints nothing if
+# neither lsof nor ss is available.
+pid_on_port() {
+    local port="$1"
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -tiTCP:"$port" -sTCP:LISTEN -Pn 2>/dev/null | head -n 1
+        return
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnpH "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | head -n 1 | cut -d= -f2
+        return
+    fi
+}
+
 ensure_process_running() {
     local pid="$1"
     local service_name="$2"
@@ -179,6 +246,19 @@ ensure_process_running() {
         wait "$pid"
     fi
 }
+
+# Test seam. `SYSUPDATE_RUN_APP_DEFINE_ONLY=1 source run_app.sh` stops here with
+# only the helpers above defined, so the port-identity probes can be exercised
+# directly (tests/integration/launcher_port_reuse.bats) instead of inferred from
+# a full launch. Nothing below this line — no trap, no build, no service — runs
+# under the flag, and the launcher never sets it itself, so an ordinary run
+# finds it unset and falls straight through.
+if [ -n "${SYSUPDATE_RUN_APP_DEFINE_ONLY:-}" ]; then
+    # `return` works when sourced (how the tests use this) and fails when the
+    # file was executed, where `exit` is the right way out.
+    # shellcheck disable=SC2317  # reached when `return` fails, i.e. not sourced
+    return 0 2>/dev/null || exit 0
+fi
 
 trap cleanup EXIT INT TERM
 
@@ -212,13 +292,33 @@ npm run build
 
 echo "Starting backend..."
 if port_in_use "$BACKEND_PORT" "$BACKEND_HOST"; then
+    # Whoever holds this port must prove it is our bridge before we either reuse
+    # it or (under -i) kill it. The frontend proxies /api and /ws here, so an
+    # unrelated listener would answer the dashboard with foreign data.
+    if ! is_sysupdate_backend; then
+        echo "A server that is not the sysupdate backend bridge is listening on ${BACKEND_HOST}:${BACKEND_PORT}." >&2
+        echo "It did not identify itself on GET /api/health, so reusing it would wire the dashboard to a foreign server." >&2
+        echo "Free that port, or choose another one with SYSUPDATE_WEB_PORT=<port>." >&2
+        exit 1
+    fi
+
     if [ "$INTERACTIVE_MODE" = true ]; then
         # -i exists to give the backend sudo access for dashboard-triggered
         # installs. A backend left from an earlier (non-authenticated) session
         # would not have those credentials, so replace it with one spawned under
         # this sudo-authenticated session instead of reusing it.
         echo "Interactive mode: restarting the backend on ${BACKEND_HOST}:${BACKEND_PORT} so it inherits this session's sudo credentials..."
-        pkill -f "backend/server.js" 2>/dev/null || true
+        # Stop the pid actually holding the verified port. `pkill -f
+        # backend/server.js` would also match a bridge from another checkout or
+        # another port, since they all run the same relative command line.
+        backend_listener_pid="$(pid_on_port "$BACKEND_PORT")"
+        if [ -n "$backend_listener_pid" ]; then
+            kill "$backend_listener_pid" 2>/dev/null || true
+        else
+            # No lsof and no ss: fall back to the old command-line match, which
+            # is indiscriminate but better than leaving a backend without sudo.
+            pkill -f "backend/server.js" 2>/dev/null || true
+        fi
         for _ in 1 2 3 4 5; do
             port_in_use "$BACKEND_PORT" "$BACKEND_HOST" || break
             sleep 1
@@ -238,8 +338,20 @@ fi
 
 echo "Starting Vite dev server..."
 if port_in_use "$APP_PORT" "$APP_HOST"; then
-    echo "A dev server is already listening on ${APP_HOST}:${APP_PORT} — reusing it (not starting a second one)."
-    # Leave DEV_PID empty so cleanup() won't kill a dev server this script didn't start.
+    # Only adopt a listener that serves *this* app. Reusing on occupancy alone
+    # once opened the browser onto another project's dashboard while our backend
+    # sat on its port with nothing pointing at it. Failing is the safer default:
+    # auto-picking a free port would silently move the app away from the address
+    # the user (and anything they have bookmarked or proxied) expects.
+    if is_sysupdate_dev_server; then
+        echo "A sysupdate dev server is already listening on ${APP_HOST}:${APP_PORT} — reusing it (not starting a second one)."
+        # Leave DEV_PID empty so cleanup() won't kill a dev server this script didn't start.
+    else
+        echo "A server that is not the sysupdate dashboard is listening on ${APP_HOST}:${APP_PORT}." >&2
+        echo "Its response carries no sysupdate marker, so reusing it would open the browser onto a different application." >&2
+        echo "Free that port, or choose another one with SYSUPDATE_WEB_APP_PORT=<port>." >&2
+        exit 1
+    fi
 else
     start_service npm run dev -- --host "$APP_HOST" --port "$APP_PORT" --strictPort
     DEV_PID=$!
