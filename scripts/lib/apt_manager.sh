@@ -352,6 +352,101 @@ apt_install_named_packages() {
     run_apt apt-get install "${packages[@]}" -y
 }
 
+# Classify why an `apt upgrade` run exited non-zero.
+#
+# apt reports 100 for every failure, so the exit code alone cannot pick a
+# recovery. --fix-missing only helps when archives could not be fetched: it
+# tells apt to carry on without the packages it failed to download. A solver
+# failure ("libudev-dev : Depends: libudev1 (= X) but Y is installed") has
+# nothing to fetch and reproduces verbatim on every retry, so retrying it
+# costs two more full apt runs, a sleep, and ends on the same message.
+apt_classify_upgrade_failure() {
+    local upgrade_output="$1"
+
+    if grep -qiE "un(met|satisfied) dependencies|--fix-broken install|apt-get -f install|held broken packages" <<< "$upgrade_output"; then
+        printf '%s\n' "dependency"
+        return 0
+    fi
+
+    if grep -qiE "failed to fetch|unable to fetch some archives|could not resolve|temporary failure resolving|connection (failed|timed out)|unable to connect|hash sum mismatch" <<< "$upgrade_output"; then
+        printf '%s\n' "fetch"
+        return 0
+    fi
+
+    printf '%s\n' "unknown"
+}
+
+# The "<pkg> : Depends: <dep> but <version> is installed" lines apt prints
+# under "Unsatisfied dependencies:" — the only part of the failure that names
+# what a human has to act on.
+apt_extract_unmet_dependency_lines() {
+    local upgrade_output="$1"
+    grep -E "^[[:space:]]*[^[:space:]]+ : (Depends|PreDepends|Breaks|Conflicts):" <<< "$upgrade_output" | sed 's/^[[:space:]]*//'
+}
+
+apt_print_dependency_failure_guidance() {
+    local upgrade_output="$1"
+    local unmet_lines
+
+    unmet_lines=$(apt_extract_unmet_dependency_lines "$upgrade_output")
+    if [ -n "$unmet_lines" ]; then
+        print_error ""
+        print_error "Dependencies apt could not satisfy:"
+        while IFS= read -r unmet_line; do
+            [ -n "$unmet_line" ] && print_error "  ↳ $unmet_line"
+        done <<< "$unmet_lines"
+    fi
+
+    print_error ""
+    print_error "Manual resolution options:"
+    print_error "  - Run 'sudo apt-get --fix-broken install' and read the proposed solution"
+    print_error "  - Upgrade the blocking dependency explicitly: 'sudo apt-get install <package>'"
+    print_error "  - Allow dependency changes: 'sudo apt-get dist-upgrade' (or re-run sysupdate with -f)"
+    print_error "  - If a package is held: check 'apt-mark showhold'"
+    print_error "  - A repair that must REMOVE packages is left to you: sysupdate will not remove packages during an upgrade"
+}
+
+# Recovery for the dependency failure class: run the command apt itself
+# recommends, then re-run the upgrade so the packages it refused to touch are
+# still upgraded in this run.
+apt_recover_from_dependency_failure() {
+    local upgrade_output="$1"
+    local upgrade_exit_code="$2"
+
+    print_warning "apt upgrade failed (exit code $upgrade_exit_code) - unmet dependencies, not a transient fetch error"
+    print_status "Retrying with --fix-missing would hit the same solver failure - running 'apt-get --fix-broken install' instead..."
+    echo
+
+    # --no-remove: a routine `apt upgrade` never removes anything, so neither
+    # may its recovery. If the only solution apt can find needs removals, it
+    # aborts here and the operator decides instead of finding out afterwards.
+    local fix_broken_output
+    fix_broken_output=$(run_apt apt-get --fix-broken install -y --no-remove 2>&1)
+    local fix_broken_exit_code=$?
+    apt_emit_command_output "$fix_broken_output" "upgrade" true
+
+    if [ $fix_broken_exit_code -ne 0 ]; then
+        print_error "'apt-get --fix-broken install' failed (exit code $fix_broken_exit_code) - dependencies remain unresolved"
+        apt_print_dependency_failure_guidance "$upgrade_output"
+        return 1
+    fi
+
+    print_success "Broken dependencies repaired - re-running the upgrade"
+    local retry_output
+    retry_output=$(run_apt apt upgrade -y -o Acquire::Retries=3 2>&1)
+    local retry_exit_code=$?
+    apt_emit_command_output "$retry_output" "upgrade" true
+
+    if [ $retry_exit_code -eq 0 ]; then
+        print_success "Package upgrade completed after repairing broken dependencies"
+        return 0
+    fi
+
+    print_error "Package upgrade still failing after repairing dependencies (exit code $retry_exit_code)"
+    apt_print_dependency_failure_guidance "$retry_output"
+    return 1
+}
+
 update_package_list() {
     print_operation_header "🔄 Updating package list from repositories..."
     print_status "⏳ This may take a few moments depending on network speed and repository count"
@@ -637,6 +732,10 @@ upgrade_packages() {
         print_error "Skipping upgrade retries - sudo authentication is unavailable in this non-interactive run"
         print_error "Run 'sudo -v' before invoking sysupdate in quiet/non-interactive mode, or re-run interactively"
         return 1
+    elif [ "$(apt_classify_upgrade_failure "$upgrade_output")" = "dependency" ]; then
+        if ! apt_recover_from_dependency_failure "$upgrade_output" "$upgrade_exit_code"; then
+            return 1
+        fi
     else
         print_warning "apt upgrade failed (exit code $upgrade_exit_code) - retrying with --fix-missing and Acquire::Retries=3 to handle transient network errors..."
         echo
