@@ -137,3 +137,154 @@ stub_run_with_sudo() {
     run run_apt apt upgrade -y
     [[ "$output" == "apt upgrade -y" ]]
 }
+
+# ---------------------------------------------------------------------------
+# apt_classify_upgrade_failure / apt_recover_from_dependency_failure
+#
+# Regression: apt exits 100 for every failure, so a solver failure
+# ("libudev-dev : Depends: libudev1 (= 259.9) but 259.5 is installed") was
+# retried twice with --fix-missing. --fix-missing only skips archives that
+# could not be fetched; with nothing to fetch the retries reproduced the same
+# error and the run ended on a message about network problems.
+# ---------------------------------------------------------------------------
+
+@test "apt_classify_upgrade_failure: unmet dependencies classify as dependency" {
+    run apt_classify_upgrade_failure "$(cat <<'OUT'
+Reading package lists...
+You might want to run 'apt --fix-broken install' to correct these.
+Unsatisfied dependencies:
+ libudev-dev : Depends: libudev1 (= 259.9-0ubuntu0.1) but 259.5-0ubuntu3.4 is installed
+Error: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).
+OUT
+)"
+    [ "$output" = "dependency" ]
+}
+
+@test "apt_classify_upgrade_failure: held broken packages classify as dependency" {
+    run apt_classify_upgrade_failure "E: Unable to correct problems, you have held broken packages."
+    [ "$output" = "dependency" ]
+}
+
+@test "apt_classify_upgrade_failure: fetch errors stay on the --fix-missing path" {
+    run apt_classify_upgrade_failure "E: Failed to fetch http://archive.ubuntu.com/pool/f.deb  Connection failed"
+    [ "$output" = "fetch" ]
+}
+
+@test "apt_classify_upgrade_failure: unrecognised failures fall back to unknown" {
+    run apt_classify_upgrade_failure "E: Sub-process /usr/bin/dpkg returned an error code (1)"
+    [ "$output" = "unknown" ]
+}
+
+@test "apt_extract_unmet_dependency_lines: names the blocking package" {
+    run apt_extract_unmet_dependency_lines "$(cat <<'OUT'
+Unsatisfied dependencies:
+ libudev-dev : Depends: libudev1 (= 259.9-0ubuntu0.1) but 259.5-0ubuntu3.4 is installed
+ foo : Conflicts: bar
+OUT
+)"
+    [[ "$output" == *"libudev-dev : Depends: libudev1"* ]]
+    [[ "$output" == *"foo : Conflicts: bar"* ]]
+    [[ "$output" != *"Unsatisfied dependencies:"* ]]
+}
+
+# Record the apt invocations the recovery makes, so the test asserts on the
+# commands rather than on printed prose.
+stub_run_apt_recorder() {
+    APT_CALLS="$BATS_TEST_TMPDIR/apt_calls"
+    : > "$APT_CALLS"
+    run_apt() {
+        echo "$*" >> "$APT_CALLS"
+        case "$*" in
+            *"--fix-broken install"*) return "${FIX_BROKEN_RC:-0}" ;;
+            *) return "${UPGRADE_RETRY_RC:-0}" ;;
+        esac
+    }
+}
+
+@test "apt_recover_from_dependency_failure: fixes broken deps then re-runs the upgrade" {
+    stub_run_apt_recorder
+    run_recover() { apt_recover_from_dependency_failure "libudev-dev : Depends: libudev1" 100; }
+    run run_recover
+    [ "$status" -eq 0 ]
+    [[ "$(sed -n 1p "$APT_CALLS")" == *"apt-get --fix-broken install -y"* ]]
+    [[ "$(sed -n 2p "$APT_CALLS")" == *"apt upgrade -y"* ]]
+    # A routine upgrade removes nothing, so neither may its repair.
+    grep -q -- "--no-remove" "$APT_CALLS"
+    # --fix-missing is for unfetchable archives; it must not appear here.
+    ! grep -q -- "--fix-missing" "$APT_CALLS"
+}
+
+@test "apt_recover_from_dependency_failure: reports failure when --fix-broken cannot help" {
+    stub_run_apt_recorder
+    FIX_BROKEN_RC=100
+    run_recover() { apt_recover_from_dependency_failure "libudev-dev : Depends: libudev1 (= 259.9) but 259.5 is installed" 100; }
+    run run_recover
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"libudev-dev : Depends: libudev1"* ]]
+    [[ "$output" == *"dist-upgrade"* ]]
+    [ "$(wc -l < "$APT_CALLS")" -eq 1 ]
+}
+
+@test "apt_recover_from_dependency_failure: reports failure when the re-run still fails" {
+    stub_run_apt_recorder
+    UPGRADE_RETRY_RC=100
+    run_recover() { apt_recover_from_dependency_failure "unmet deps" 100; }
+    run run_recover
+    [ "$status" -eq 1 ]
+    [ "$(wc -l < "$APT_CALLS")" -eq 2 ]
+}
+
+# The wiring itself: a dependency failure inside upgrade_packages must reach
+# the fix-broken path, never the --fix-missing retries.
+stub_upgrade_packages_env() {
+    QUIET_MODE=true
+    CHECK_ONLY_MODE=false
+    SUDO_UNAVAILABLE=false
+    ask_continue() { :; }
+    check_updates_available() { return 0; }
+    APT_CALLS="$BATS_TEST_TMPDIR/apt_calls"
+    : > "$APT_CALLS"
+    run_apt() {
+        echo "$*" >> "$APT_CALLS"
+        case "$*" in
+            *"--fix-broken install"*) return 0 ;;
+            *"apt upgrade"*)
+                if [ "$(grep -c "apt upgrade" "$APT_CALLS")" -eq 1 ]; then
+                    cat <<'OUT'
+Unsatisfied dependencies:
+ libudev-dev : Depends: libudev1 (= 259.9-0ubuntu0.1) but 259.5-0ubuntu3.4 is installed
+Error: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).
+OUT
+                    return 100
+                fi
+                echo "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
+                return 0
+                ;;
+        esac
+        return 0
+    }
+}
+
+@test "upgrade_packages: routes an unmet-dependency failure to --fix-broken" {
+    stub_upgrade_packages_env
+    run upgrade_packages
+    [ "$status" -eq 0 ]
+    [[ "$(sed -n 2p "$APT_CALLS")" == *"apt-get --fix-broken install -y"* ]]
+    [[ "$output" == *"not a transient fetch error"* ]]
+    ! grep -q -- "--fix-missing" "$APT_CALLS"
+}
+
+@test "upgrade_packages: still retries a fetch failure with --fix-missing" {
+    stub_upgrade_packages_env
+    run_apt() {
+        echo "$*" >> "$APT_CALLS"
+        case "$*" in
+            *"--fix-missing"*) echo "Fetched 1 B"; return 0 ;;
+            *) echo "E: Failed to fetch http://archive.ubuntu.com/pool/f.deb  Connection failed"; return 100 ;;
+        esac
+    }
+    run upgrade_packages
+    [ "$status" -eq 0 ]
+    grep -q -- "--fix-missing" "$APT_CALLS"
+    ! grep -q -- "--fix-broken" "$APT_CALLS"
+}
