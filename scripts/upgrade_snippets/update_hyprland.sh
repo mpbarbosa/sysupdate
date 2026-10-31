@@ -7,13 +7,23 @@
 # Handles version checking and updates for Hyprland wayland compositor.
 # Reference: https://github.com/hyprwm/Hyprland
 #
-# Version: 1.0.0-alpha
-# Date: 2025-12-14
+# Version: 1.2.0-alpha
+# Date: 2026-10-30
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   1.2.0-alpha (2026-10-30) - Recover a managed-but-missing install: when nothing
+#                            - runnable is on PATH yet an alternatives group /
+#                            - generic link / isolated prefix remains, offer the
+#                            - rebuild instead of generic install help.
+#                            - Fixed hyprland_alt_upstream_target returning "" for
+#                            - any non-/opt candidate (head -1 masked grep's status)
+#                            - and resolve a destination when the group has been
+#                            - pruned to zero candidates.
+#   1.1.0-alpha (2026-08-10) - update-alternatives-aware update path (see
+#                            - hyprland.yaml for that revision's notes).
 #   1.0.0-alpha (2025-12-14) - Initial version following upgrade script pattern v1.2.0
 #                            - Uses Method 3: Custom Update Logic
 #                            - Supports both source build and git pull update
@@ -43,6 +53,11 @@ source "$LIB_DIR/upgrade_utils.sh"
 
 # Load configuration
 CONFIG_FILE="$HYPRLAND_SCRIPT_DIR/hyprland.yaml"
+
+# The isolated upstream prefix that scripts/setup-hyprland-alternatives.sh builds
+# into (its $DEST). Named here rather than sourced from that script, which would
+# drag in its root check and `set -euo pipefail`.
+HYPRLAND_UPSTREAM_PREFIX="/opt/hyprland"
 
 # Build Hyprland from source
 build_hyprland_from_source() {
@@ -405,15 +420,49 @@ hyprland_alt_active_value() {
     update-alternatives --query Hyprland 2>/dev/null | awk '/^Value: /{print $2}'
 }
 
-# Print the upstream (non-apt) alternative target path, or "".
-# Prefers the /opt/hyprland layout; falls back to any non-/usr/bin candidate.
+# Print the upstream (non-apt) alternative target path.
+# Prefers the isolated-prefix layout, then any non-/usr/bin candidate, and
+# finally the prefix a rebuild would install into.
+#
+# NB: the obvious `grep ... | head -1 && return 0` does NOT work here. `head`
+# exits 0 on empty input and the pipeline's status is `head`'s, so the guard
+# fired even when grep matched nothing and every later fallback was dead code.
+# Capture first, then test the string.
 hyprland_alt_upstream_target() {
-    local candidates
+    local candidates preferred fallback
     candidates=$(update-alternatives --query Hyprland 2>/dev/null \
                    | awk '/^Alternative: /{print $2}' \
                    | grep -v '^/usr/bin/Hyprland$')
-    printf '%s\n' "$candidates" | grep '/opt/hyprland/bin/Hyprland$' | head -1 && return 0
-    printf '%s\n' "$candidates" | grep -v '^$' | head -1
+
+    preferred=$(printf '%s\n' "$candidates" | grep "^$HYPRLAND_UPSTREAM_PREFIX/bin/Hyprland\$" | head -1)
+    if [ -n "$preferred" ]; then
+        printf '%s\n' "$preferred"
+        return 0
+    fi
+
+    fallback=$(printf '%s\n' "$candidates" | grep -v '^$' | head -1)
+    if [ -n "$fallback" ]; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    # The group can be registered yet hold NO candidates: update-alternatives
+    # prunes an alternative whose file has gone — a rebuild that deleted the
+    # prefix without replacing it, or an `apt remove hyprland` — leaving just the
+    # generic link. A rebuild still has a well-defined destination, so name it.
+    printf '%s\n' "$HYPRLAND_UPSTREAM_PREFIX/bin/Hyprland"
+}
+
+# Is there evidence of a managed Hyprland install on this machine even though
+# nothing runnable is on PATH? Any of: a registered alternatives group (possibly
+# pruned to zero candidates), the generic link (possibly dangling), or the
+# isolated prefix. In that state "install it yourself" help is useless — the
+# machine already had Hyprland and a rebuild is what brings it back.
+hyprland_managed_install_present() {
+    hyprland_is_alternatives_managed && return 0
+    [ -L /usr/local/bin/Hyprland ] && return 0
+    [ -d "$HYPRLAND_UPSTREAM_PREFIX" ] && return 0
+    return 1
 }
 
 # Update the upstream Hyprland build behind update-alternatives by rebuilding it
@@ -508,6 +557,33 @@ update_hyprland() {
                     perform_hyprland_alternatives_update "$repair_version"
                 else
                     perform_hyprland_update "$repair_version"
+                fi
+            fi
+        elif hyprland_managed_install_present; then
+            # Nothing runnable on PATH, but this machine HAS a managed install:
+            # the binary is gone while the alternatives group / generic link /
+            # isolated prefix remain. That is a broken install, not a missing one,
+            # so offer the rebuild instead of generic installation advice.
+            print_warning "No runnable ${APP_DISPLAY_NAME:-Hyprland}, but a managed install is registered on this machine."
+            local alt_count
+            alt_count=$(update-alternatives --list Hyprland 2>/dev/null | grep -c . || true)
+            print_status "   alternatives candidates: ${alt_count:-0}; upstream prefix: $HYPRLAND_UPSTREAM_PREFIX"
+            if [ -L /usr/local/bin/Hyprland ] && [ ! -e /usr/local/bin/Hyprland ]; then
+                print_status "   /usr/local/bin/Hyprland is a dangling link — its target was removed"
+            fi
+            if [ "${CHECK_ONLY_MODE:-false}" = true ]; then
+                print_status "Check-only mode - a rebuild (skipped here) would reinstall it"
+                ask_continue
+                return 0
+            fi
+            if prompt_yes_no "Rebuild ${APP_DISPLAY_NAME:-Hyprland} into $HYPRLAND_UPSTREAM_PREFIX to restore it?"; then
+                local restore_version
+                restore_version=$(get_github_latest_version \
+                    "$(get_config version.github_owner)" "$(get_config version.github_repo)")
+                if hyprland_is_alternatives_managed; then
+                    perform_hyprland_alternatives_update "$restore_version"
+                else
+                    perform_hyprland_update "$restore_version"
                 fi
             fi
         fi
