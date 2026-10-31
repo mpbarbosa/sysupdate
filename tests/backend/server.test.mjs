@@ -380,6 +380,40 @@ function childPidsOf(parentPid) {
     .map(Number);
 }
 
+/** comm (the executable name) from /proc/<pid>/stat, or null once it is gone. */
+function commOf(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The stub's `sleep` children specifically. Plain childPidsOf is not enough:
+ * the stub opens with a `cat` heredoc, so "bash has a child" is true for a few
+ * milliseconds for a reason that has nothing to do with the run being slow.
+ */
+const sleepChildrenOf = (parentPid) =>
+  childPidsOf(parentPid).filter((pid) => commOf(pid) === 'sleep');
+
+/**
+ * Poll a synchronous predicate until it holds. The waitFor above watches run
+ * state as the bridge reports it over HTTP; this one watches the OS directly,
+ * for facts the bridge never reports — a grandchild being forked, a process
+ * reaching state 'T'. Both are needed: a 202 from a control route means the
+ * signal was sent, not that the kernel has already acted on it.
+ */
+async function waitUntil(predicate, description, maxMs = 5000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
+
 async function startSlowRun() {
   const res = await fetch(`${BASE}/api/runs/check-only`, {
     method: 'POST',
@@ -387,7 +421,20 @@ async function startSlowRun() {
     body: JSON.stringify({ snippetId: 'slow' }),
   });
   assert.strictEqual(res.status, 202);
-  return waitFor((run) => run.status === 'running', 'the slow run to report running');
+  const run = await waitFor((r) => r.status === 'running', 'the slow run to report running');
+
+  // `running` is set when the bridge spawns Bash, before the stub has run a
+  // line, so the `sleep` this run is named for may not exist yet. Waiting for
+  // it keeps two tests honest: the pause test would otherwise race the fork,
+  // and the stop test's "no child survived" would pass vacuously against a run
+  // that never had a child to lose.
+  if (process.platform === 'linux') {
+    await waitUntil(
+      () => sleepChildrenOf(run.pid).length > 0,
+      "the slow stub's sleep child to be forked",
+    );
+  }
+  return run;
 }
 
 describe('run controls — idle bridge', { concurrency: false }, () => {
@@ -419,11 +466,11 @@ describe('POST /api/runs/pause and /resume', { concurrency: false }, () => {
     // The point of the detached process group: the CLI's children are
     // suspended too, not just the Bash process the bridge spawned.
     if (process.platform === 'linux') {
-      assert.strictEqual(processState(started.pid), 'T', 'the CLI process should be stopped');
-      const children = childPidsOf(started.pid);
+      await waitUntil(() => processState(started.pid) === 'T', 'the CLI process to be stopped');
+      const children = sleepChildrenOf(started.pid);
       assert.ok(children.length > 0, 'the slow stub should have a sleep child');
       for (const child of children) {
-        assert.strictEqual(processState(child), 'T', `child ${child} should be stopped too`);
+        await waitUntil(() => processState(child) === 'T', `child ${child} to be stopped too`);
       }
     }
 
@@ -437,7 +484,7 @@ describe('POST /api/runs/pause and /resume', { concurrency: false }, () => {
     assert.strictEqual((await resumed.json()).run.status, 'running');
     assert.strictEqual((await currentRun()).pausedAt, null);
     if (process.platform === 'linux') {
-      assert.notStrictEqual(processState(started.pid), 'T', 'the CLI process should be running again');
+      await waitUntil(() => processState(started.pid) !== 'T', 'the CLI process to be running again');
     }
 
     // Resuming a run that is not paused is a no-op, not a 409.
@@ -470,7 +517,10 @@ describe('POST /api/runs/stop', { concurrency: false }, () => {
     );
 
     if (process.platform === 'linux') {
-      assert.strictEqual(childPidsOf(started.pid).length, 0, 'no child of the CLI should survive the stop');
+      await waitUntil(
+        () => childPidsOf(started.pid).length === 0,
+        'no child of the CLI to survive the stop',
+      );
     }
   });
 
