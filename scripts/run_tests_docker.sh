@@ -139,7 +139,11 @@ fi
 
 if [ "${RUN_WEB:-true}" = true ]; then
     section "Web: type-check (tsc --noEmit)"
-    npm --prefix web exec tsc -- --noEmit
+    # From inside web/, like run_tests.sh: with the repo root as cwd, tsc finds no
+    # tsconfig.json, mis-parses --noEmit and prints its usage with exit 1, which
+    # failed this suite on a tree whose types are fine. `npm run` scripts below
+    # are safe because npm runs them with the package directory as cwd.
+    ( cd web && ./node_modules/.bin/tsc --noEmit )
 
     section "Web: lint (eslint)"
     npm --prefix web run lint
