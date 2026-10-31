@@ -370,7 +370,7 @@ commit_prefix() {
 # Test seam, mirroring web/run_app.sh. `SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1
 # source setup-hyprland-alternatives.sh` stops here with only the helpers above
 # defined, so the prefix staging/rollback can be exercised directly
-# (tests/bash/hyprland_setup_prefix.bats) instead of inferred from a real root
+# (tests/integration/hyprland_setup_prefix.bats) instead of inferred from a real root
 # build. Nothing below this line — no removal, no build, no update-alternatives
 # — runs under the flag, and the script never sets it itself.
 if [ -n "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
