@@ -6,7 +6,10 @@
 #
 # The script needs root and rebuilds /opt/hyprland, so these tests reach its
 # helpers through the SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1 seam (just above its
-# --remove section), which defines them and runs nothing. Like
+# --remove section), which defines them and runs nothing. It lives in
+# tests/integration/ rather than tests/bash/ because it spawns a shell and
+# touches the filesystem, which docs/guides/UNIT_TEST_GUIDE.md excludes from the
+# unit suite. Like its neighbour
 # tests/integration/launcher_port_reuse.bats, each probe sources the script in
 # its own `bash -c` so the script's `set -euo pipefail` never leaks into the BATS
 # shell and BATS's own positional args never reach the script's arg parser. DEST

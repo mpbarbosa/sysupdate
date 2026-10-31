@@ -14,7 +14,7 @@ Three test suites live here:
 - `setup()` in BATS: source the module under test, `export NO_COLOR=1`, set `REPO_ROOT`
 - Integration tests use `SYSUPDATE_SNIPPETS_DIR` to point at `tests/integration/fixtures/snippets/` — never real snippets
 - Backend tests use `SYSUPDATE_SCRIPT_PATH` to point at `tests/backend/fixtures/stub_script.sh` — never the real script
-- `tests/bash/hyprland_setup_prefix.bats` reaches `scripts/setup-hyprland-alternatives.sh` (a root,
+- `tests/integration/hyprland_setup_prefix.bats` reaches `scripts/setup-hyprland-alternatives.sh` (a root,
   `/opt`-writing script) through `SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1`, sourcing it inside
   `bash -c` so its `set -euo pipefail` stays out of the BATS shell and BATS's own positional args
   never reach the script's arg parser. `DEST` is repointed at `$BATS_TEST_TMPDIR` — never real `/opt`
