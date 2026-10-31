@@ -35,6 +35,8 @@ probe() {
     run env \
         SETUP="$SETUP" \
         TEST_DEST="$BATS_TEST_TMPDIR/hyprland" \
+        TEST_CFG_LOG="$BATS_TEST_TMPDIR/cmake-configure.log" \
+        TEST_KEEP_LOG="$BATS_TEST_TMPDIR/kept-configure.log" \
         SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1 \
         bash -c 'source "$SETUP"
 DEST="$TEST_DEST"
@@ -228,6 +230,163 @@ show() { echo "$1=$(cat "$2" 2>/dev/null || echo MISSING)"; }
 
 @test "cleanup_build: the build section calls arm_build_rollback" {
     run grep -c "^[[:space:]]*arm_build_rollback\$" "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# explain_configure_failure
+#
+# A failed CMake configure has two causes needing opposite fixes — an apt -dev
+# package that is one install away, and a hypr* library that needs a source
+# build of several minutes. The message used to print both and let the reader
+# choose. On 2026-10-31 Hyprland v0.57.0 added a `libcanberra` module and that
+# message sent the reader toward --with-deps for a missing libcanberra-dev.
+#
+# Each fixture below is real CMake output, not invented: the libcanberra one is
+# from that failed v0.57.0 run, the aquamarine one from a configure of v0.57.0
+# against the aquamarine 0.14.0 this machine had installed.
+# ---------------------------------------------------------------------------
+
+# Write <stdin> to the log the explain_* probes read.
+given_configure_log() {
+    cat > "$BATS_TEST_TMPDIR/cmake-configure.log"
+}
+
+explain() {
+    probe '
+        REF=v0.57.0
+        CONFIG_LOG_KEEP="$TEST_KEEP_LOG"
+        explain_configure_failure "$TEST_CFG_LOG" 2>&1
+    '
+}
+
+@test "explain_configure_failure: a missing -dev package names the apt package" {
+    given_configure_log <<'EOF'
+-- Checking for modules 'xkbcommon>=1.11.0;uuid;cairo;pango;lcms2;libcanberra'
+--   Package 'libcanberra' not found
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - libcanberra
+
+Call Stack (most recent call first):
+  CMakeLists.txt:269 (pkg_check_modules)
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sudo apt-get install -y libcanberra-dev"* ]]
+    [[ "$output" == *"libcanberra"* ]]        # the module itself is named
+    [[ "$output" != *"--with-deps"* ]]        # and no source build is suggested
+}
+
+@test "explain_configure_failure: a too-old hypr* dep names --with-deps" {
+    given_configure_log <<'EOF'
+-- Checking for module 'aquamarine>=0.15.0'
+--   Package dependency requirement 'aquamarine >= 0.15.0' could not be satisfied.
+Package 'aquamarine' has version '0.14.0', required version is '>= 0.15.0'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - aquamarine>=0.15.0
+
+Call Stack (most recent call first):
+  CMakeLists.txt:153 (pkg_check_modules)
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--with-deps=aquamarine"* ]]
+    [[ "$output" != *"apt-get install -y aquamarine"* ]]
+}
+
+@test "explain_configure_failure: reports both classes when both are unsatisfied" {
+    given_configure_log <<'EOF'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - libcanberra
+   - hyprutils>=0.14.3
+
+Call Stack (most recent call first):
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sudo apt-get install -y libcanberra-dev"* ]]
+    [[ "$output" == *"--with-deps=hyprutils"* ]]
+}
+
+@test "explain_configure_failure: ignores an optional module the build fell back for" {
+    # Hyprland probes udis86 with the same pkg_check_modules call shape and then
+    # falls back to a subproject. It is absent from CMake's "required packages
+    # were not found" list, which is why that list — and not the bare
+    # "Package 'x' not found" lines — is what this function reads.
+    given_configure_log <<'EOF'
+-- Checking for module 'udis86>=1.7.2'
+--   Package 'udis86' not found
+-- udis86 dependency not found, falling back to subproject
+-- Checking for module 'aquamarine>=0.15.0'
+--   Package 'aquamarine' not found
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - aquamarine>=0.15.0
+
+Call Stack (most recent call first):
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--with-deps=aquamarine"* ]]
+    [[ "$output" != *"udis86"* ]]
+}
+
+@test "explain_configure_failure: an unmapped module gets an apt-file hint" {
+    given_configure_log <<'EOF'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - libfoobarbaz>=2.0
+
+Call Stack (most recent call first):
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"apt-file search libfoobarbaz.pc"* ]]
+}
+
+@test "explain_configure_failure: still prints advice when no module is named" {
+    # The parse pipelines run under the script's `set -euo pipefail`, where a
+    # grep matching nothing fails the pipeline. Without the `|| true` guards
+    # errexit killed this function and the run ended with no explanation at all.
+    given_configure_log <<'EOF'
+/tmp/hyprland-build-x/src/render/Renderer.cpp:91:5: error: no matching function
+compilation terminated.
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CMake configuration failed"* ]]
+    [[ "$output" == *"Nothing in the log names an unsatisfied pkg-config module"* ]]
+    [[ "$output" == *"--with-deps"* ]]
+}
+
+@test "explain_configure_failure: keeps the log where the build cleanup cannot reach it" {
+    # The log lives in $build_root, which cleanup_build removes on exit, so the
+    # path the message prints has to be a copy outside it.
+    given_configure_log <<'EOF'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - libcanberra
+
+Call Stack (most recent call first):
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Full configure log: $BATS_TEST_TMPDIR/kept-configure.log"* ]]
+    [ -s "$BATS_TEST_TMPDIR/kept-configure.log" ]
+}
+
+@test "explain_configure_failure: the configure failure path calls it" {
+    run grep -cE '^[[:space:]]+explain_configure_failure "\$cfg_log"$' "$SETUP"
     [ "$status" -eq 0 ]
     [ "$output" = "1" ]
 }

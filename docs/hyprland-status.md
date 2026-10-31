@@ -1,18 +1,129 @@
-# Hyprland install status — UNRESOLVED (no Hyprland installed)
+# Hyprland install status — upstream 0.56.2 installed, 0.57.0 upgrade blocked then unblocked
 
-**Status:** ❌ As of 2026-10-30 this machine has **no Hyprland binary at all**. The apt package was
-removed on 2026-08-17 and the upstream `/opt/hyprland` build was destroyed by its own failed rebuild
-on 2026-10-28. `/usr/local/bin/Hyprland` is a dangling symlink and the `update-alternatives` group
-holds zero candidates.
+**Status:** ✅ As of 2026-10-31 this machine runs **upstream Hyprland 0.56.2** from `/opt/hyprland`,
+registered in the `update-alternatives` group at priority 56. The apt package is still absent
+(removed 2026-08-17); the group therefore holds one candidate, not two.
 **Scope:** incident 1 (below) was a system problem that sysupdate merely reported. **Incident 2 was
 caused by this repo's own `setup-hyprland-alternatives.sh`** — see the fixes recorded there.
+**Incident 3** is the 0.57.0 upgrade attempt that the incident-2 rollback caught cleanly.
 
-| What | Expected path | State on 2026-10-30 |
+| What | Expected path | State on 2026-10-31 |
 | --- | --- | --- |
-| apt build | `/usr/bin/Hyprland` | absent — `apt remove -y hyprland` removed `0.53.3+ds-4` on 2026-08-17 |
-| upstream build | `/opt/hyprland/bin/Hyprland` | absent — prefix holds `include/`, `lib/`, `share/` but no `bin/` |
-| generic link | `/usr/local/bin/Hyprland` | dangling → `/etc/alternatives/Hyprland` → the missing file above |
-| alternatives group | — | registered, **0 candidates** (both pruned as their files vanished) |
+| apt build | `/usr/bin/Hyprland` | absent — `apt remove -y hyprland` removed `0.53.3+ds-4` on 2026-08-17 (candidate `0.53.3+ds-4`) |
+| upstream build | `/opt/hyprland/bin/Hyprland` | **present** — `Hyprland 0.56.2` (commit `efb5099`), with aquamarine 0.14.0 / hyprutils 0.14.0 / hyprgraphics 0.5.1 in its `lib/` |
+| previous generation | `/opt/hyprland.previous/bin/Hyprland` | present, retained by `commit_prefix` — but **not runnable in place**, see the note under incident 3 |
+| generic link | `/usr/local/bin/Hyprland` | → `/etc/alternatives/Hyprland` → `/opt/hyprland/bin/Hyprland` |
+| alternatives group | — | `Status: auto`, 1 candidate (`/opt/hyprland/bin/Hyprland`, priority 56), slaves `hyprctl` + `hyprpm` |
+
+---
+
+## Incident 3 (2026-10-31) — v0.57.0 needs `libcanberra-dev`, and the rollback held
+
+### What happened
+
+The `hyprland` snippet offered `0.56.2 → 0.57.0`. The rebuild failed at CMake configure:
+
+```
+-- Checking for modules 'xkbcommon>=1.11.0;…;lcms2;libcanberra'
+--   Package 'libcanberra' not found
+CMake Error at …/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+   - libcanberra
+  CMakeLists.txt:269 (pkg_check_modules)
+==> This run did not produce a working build — restoring the previous /opt/hyprland
+    restored. The compositor you had before this run is back in place.
+```
+
+**The atomic rebuild added after incident 2 did its job — this is its first real-world test.** The
+0.56.2 install was staged aside, the failed run restored it, and the running compositor was never
+affected. Compare incident 2, where the same class of failure left the machine with no compositor
+on disk.
+
+### Root cause
+
+`libcanberra-dev` had never been installed. The runtime library (`libcanberra0 0.30-18ubuntu3`) was
+present, so nothing else on the machine noticed; only `pkg-config --exists libcanberra`, which needs
+the `.pc` file from the `-dev` package, could see the gap. Hyprland v0.57.0 added `libcanberra` to
+the `pkg_check_modules` call at `CMakeLists.txt:269`; 0.56.2 did not ask for it.
+
+Every other module in that call was already satisfied — this was a one-package gap, fixed by:
+
+```bash
+sudo apt-get install -y libcanberra-dev     # 0.30-18ubuntu3, 6.8 kB
+```
+
+### Contributing cause: the failure message pointed at the wrong fix
+
+`setup-hyprland-alternatives.sh` printed one generic message for every configure failure. It led
+with the hypr*-stack source build (`--with-deps`, several minutes) and buried the real fix — "if
+instead a plain -dev package is missing, apt-install it and re-run" — in its last line. For a
+missing 6.8 kB apt package it steered the reader toward rebuilding four libraries from source.
+
+Fixed by `explain_configure_failure`, which reads the configure log back and names what was actually
+unsatisfied and the one command that fixes it:
+
+| Unsatisfied | What the message now says |
+| --- | --- |
+| `libcanberra` | `sudo apt-get install -y libcanberra-dev` |
+| `aquamarine>=0.15.0` | `sudo bash …/setup-hyprland-alternatives.sh --with-deps=aquamarine` |
+| both at once | both lines, each naming only its own modules |
+| a module with no known apt package | `apt-file search <module>.pc` |
+| nothing pkg-config-shaped in the log | says so, and falls back to the generic advice |
+
+It reads CMake's own "The following required packages were not found" list rather than the bare
+`Package 'x' not found` lines, because Hyprland probes *optional* modules the same way: a real
+v0.57.0 log contains `Package 'udis86' not found` immediately followed by "falling back to
+subproject", and an earlier version of the function sent the reader hunting for a `udis86` package
+the build never needed. Behaviour cover (including that case) is in
+[`tests/integration/hyprland_setup_prefix.bats`](../tests/integration/hyprland_setup_prefix.bats).
+
+### What a v0.57.0 attempt needs
+
+Measured on 2026-10-31. v0.57.0's minimums come from its `CMakeLists.txt`:
+
+| Module | Required by 0.57.0 | On this machine | Source |
+| --- | --- | --- | --- |
+| `aquamarine` | ≥ 0.15.0 | 0.14.0 in `/opt/hyprland`, 0.9.3 in apt | **needs `--with-deps`** (latest tag `v0.15.1`) |
+| `hyprutils` | ≥ 0.14.3 | 0.14.0 in `/opt/hyprland`, 0.11.0 in apt | **needs `--with-deps`** (latest tag `v0.14.3`) |
+| `hyprgraphics` | ≥ 0.5.1 | 0.5.1 | ok (`--with-deps` rebuilds it anyway) |
+| `wayland-protocols` | ≥ 1.49 | 1.50 in `/opt/hyprland`, 1.47 in apt | **needs `--with-deps`** (apt is too old) |
+| `hyprlang` | ≥ 0.6.7 | 0.6.7 | ok, exactly at the minimum |
+| `hyprcursor` | ≥ 0.1.7 | 0.1.13 | ok |
+| `xkbcommon` | ≥ 1.11.0 | 1.13.1 | ok |
+| `wayland-server` | ≥ 1.22.91 | 1.24.0 | ok |
+| `libinput` | ≥ 1.29 | 1.31.1 | ok |
+| `libcanberra` | any | 0.30 | ok **since this incident** |
+
+So the upgrade command is:
+
+```bash
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps      # hyprutils wayland-protocols aquamarine hyprgraphics
+```
+
+Do **not** pin the deps to `@v0.14.0` tags here — that pinning is what the incident-2 notes recommend
+for rebuilding *0.56.2*, and aquamarine 0.14.0 is below 0.57.0's floor.
+
+### Note: `/opt/hyprland.previous` does not run in place
+
+`commit_prefix` keeps one generation, but the binaries are linked with an absolute
+`RUNPATH=/opt/hyprland/lib`, so the retired copy looks for its libraries in the *live* prefix:
+
+```
+$ /opt/hyprland.previous/bin/Hyprland --version
+error while loading shared libraries: libaquamarine.so.14: cannot open shared object file
+```
+
+The libraries are there (`/opt/hyprland.previous/lib/libaquamarine.so.14` exists) — only the path
+baked into the binary is wrong. Rolling back therefore means swapping the directories back, not
+running the retired binary:
+
+```bash
+sudo mv /opt/hyprland /opt/hyprland.bad       # the generation you are rolling back FROM
+sudo mv /opt/hyprland.previous /opt/hyprland  # the retired one, now at the path its RUNPATH names
+```
+
+A build with `RUNPATH=$ORIGIN/../lib` would make both generations runnable where they stand; that is
+not done yet.
 
 ---
 
