@@ -249,6 +249,44 @@ show() { echo "$1=$(cat "$2" 2>/dev/null || echo MISSING)"; }
 }
 
 # ---------------------------------------------------------------------------
+# derive_cc_for — the C compiler that belongs with a given C++ compiler
+#
+# This was a hardcoded list naming g++-13 and g++-14, so g++-16 fell through to
+# "cc" and silently mixed toolchains. g++-16 is not hypothetical: Hyprland
+# v0.57.0 calls std::string::subview, which GCC 15's libstdc++ does not have.
+# ---------------------------------------------------------------------------
+
+@test "derive_cc_for: the system g++ pairs with gcc" {
+    probe 'derive_cc_for g++'
+    [ "$status" -eq 0 ]
+    [ "$output" = "gcc" ]
+}
+
+@test "derive_cc_for: any versioned g++-N pairs with gcc-N" {
+    probe '
+        derive_cc_for g++-16
+        derive_cc_for g++-14
+        derive_cc_for /usr/bin/g++-20
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "gcc-16" ]
+    [ "${lines[1]}" = "gcc-14" ]
+    [ "${lines[2]}" = "gcc-20" ]
+}
+
+@test "derive_cc_for: clang++ pairs with clang, anything else with cc" {
+    probe '
+        derive_cc_for clang++
+        derive_cc_for /opt/llvm/bin/clang++
+        derive_cc_for tcc
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "clang" ]
+    [ "${lines[1]}" = "clang" ]
+    [ "${lines[2]}" = "cc" ]
+}
+
+# ---------------------------------------------------------------------------
 # explain_configure_failure
 #
 # A failed CMake configure has two causes needing opposite fixes — an apt -dev

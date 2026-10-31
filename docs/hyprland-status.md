@@ -1,11 +1,12 @@
-# Hyprland install status — upstream 0.56.2 installed, 0.57.0 upgrade blocked then unblocked
+# Hyprland install status — upstream 0.56.2 installed, 0.57.0 blocked on GCC 16
 
 **Status:** ✅ As of 2026-10-31 this machine runs **upstream Hyprland 0.56.2** from `/opt/hyprland`,
 registered in the `update-alternatives` group at priority 56. The apt package is still absent
 (removed 2026-08-17); the group therefore holds one candidate, not two.
 **Scope:** incident 1 (below) was a system problem that sysupdate merely reported. **Incident 2 was
 caused by this repo's own `setup-hyprland-alternatives.sh`** — see the fixes recorded there.
-**Incident 3** is the 0.57.0 upgrade attempt that the incident-2 rollback caught cleanly.
+**Incident 3** is the 0.57.0 upgrade: three attempts, each rolled back cleanly, now blocked on a
+toolchain gap rather than on dependencies — see "Why v0.57.0 does not build here" below.
 
 | What | Expected path | State on 2026-10-31 |
 | --- | --- | --- |
@@ -115,6 +116,55 @@ Also note what a `--with-deps=<one name>` suggestion would have cost: each run r
 from scratch, so building only the dependency that failed leaves the other four out and the next
 configure fails on one of them. `explain_configure_failure` therefore prints the union of
 `DEPS_DEFAULT` and whatever was unsatisfied, never the failing module alone.
+
+### Why v0.57.0 does not build here: one C++26 call
+
+With the dependency chain satisfied, the third attempt reached the compositor itself and stopped at
+47%:
+
+```
+src/ipc/s1/S1.cpp:148:130: error: 'std::string' has no member named 'subview'
+```
+
+`std::string::subview` is C++26, added to libstdc++ in **GCC 16** (`__cpp_lib_string_subview`,
+`v = 202506`, `cxxmin = 26` in GCC 16's `version.def`; GCC 15.2 does not define the macro, verified
+by compiling for it). Measured facts, all on 2026-10-31:
+
+| | |
+| --- | --- |
+| uses of `subview` in the whole v0.57.0 tree | **1** — this line |
+| distinct compile errors in the failed build | 1 |
+| installed C++ header trees | `/usr/include/c++/14`, `/usr/include/c++/15` — no 16 |
+| installed `libstdc++6` runtime | **`16-20260322-1ubuntu1`**, exporting `GLIBCXX_3.4.35` |
+| `g++-16` in apt | candidate `16-20260322-1ubuntu1`, not installed |
+| upstream `main` still calls `subview` | yes — not a bug awaiting a patch release |
+| tags after v0.57.0 | none |
+
+So this is a toolchain gap, not a Hyprland bug and not a dependency problem. The runtime half is
+already in place: the `libstdc++6` on this machine *is* GCC 16's, which is why nothing else noticed
+that the compiler is a major version behind its own runtime library.
+
+The route, untested as of this writing:
+
+```bash
+sudo apt-get install -y g++-16
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps --cxx g++-16
+```
+
+`--cxx` with a newer g++ is explicitly fine — the warning in the script's header is about *older*
+ones, whose libstdc++ cannot resolve apt's C++ libraries. It needed one fix to work cleanly:
+`derive_cc_for` chose the matching C compiler from a hardcoded list naming g++-13 and g++-14, so
+`g++-16` fell through to `cc` (GCC 15) and silently mixed toolchains. It now derives `gcc-N` from
+`g++-N` by pattern.
+
+The alternatives, for the record:
+
+- **Wait.** `libstdc++6` is already GCC 16's, so the distro's default `g++` moving to 16 is a matter
+  of time, and 0.56.2 keeps running meanwhile.
+- **Patch the one line** (`std::string_view(request).substr(i, 2)` is what `subview(i, 2)` does).
+  Not done, and not wanted: the script's policy is to work around stdlib gaps with a force-included
+  shim rather than editing upstream source — see the `std::ranges::starts_with` compat header — and
+  a member function cannot be shimmed that way, so this would be the first real source patch.
 
 ### Note: `/opt/hyprland.previous` does not run in place
 

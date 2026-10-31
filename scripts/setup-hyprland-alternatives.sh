@@ -30,8 +30,12 @@
 # NOTE: builds with the SYSTEM g++ (GCC 15 on resolute) — required so the GCC-15
 # libstdc++ ABI matches apt's C++ libs (GLIBCXX_3.4.34). Do NOT use an older g++.
 # For GCC 15's -Wtemplate-body false positive on Hyprland 0.56.2 the script passes
-# -Wno-template-body automatically. Use --cxx only for another libstdc++ compiler
-# (e.g. clang++), never an older g++.
+# -Wno-template-body automatically. Never use an OLDER g++ (its libstdc++ cannot
+# resolve apt's C++ libs). A NEWER one is fine and is sometimes required: Hyprland
+# v0.57.0 calls std::string::subview, which needs GCC 16's libstdc++ — and this
+# machine's libstdc++6 runtime is already GCC 16's, so
+#   sudo apt-get install -y g++-16 && sudo bash … --with-deps --cxx g++-16
+# is the route for it. See docs/hyprland-status.md, incident 3.
 #
 # --with-deps builds/installs the latest release of each named dep into
 # /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
@@ -122,18 +126,28 @@ fi
 # std::ranges::starts_with in a template body even though <algorithm> is included
 # and the standard is C++26 — the name resolves fine at instantiation. So we pass
 # -Wno-template-body when building Hyprland with GCC, deferring the check.
+# derive_cc_for <c++-compiler> — the C compiler that belongs with it.
+#
+# Versioned suffixes are handled by pattern, not by a list: this used to name
+# g++-13 and g++-14 explicitly, so g++-16 — the compiler Hyprland v0.57.0 needs,
+# because its `std::string::subview` call wants a C++26 libstdc++ that GCC 15
+# does not have — fell through to "cc" and quietly mixed toolchains. Only the
+# name is derived; whether it exists is the caller's business.
+derive_cc_for() {
+    case "$1" in
+        *clang++)  echo "clang" ;;
+        *g++-*)    echo "gcc-${1##*g++-}" ;;
+        *g++)      echo "gcc" ;;
+        *)         echo "cc" ;;
+    esac
+}
+
 HYPRLAND_EXTRA_CXXFLAGS=""
 if [ "$SKIP_BUILD" = false ] && [ -z "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
     [ -n "$CXX" ] || CXX="g++"
     command -v "$CXX" >/dev/null 2>&1 || { echo "error: C++ compiler '$CXX' not found" >&2; exit 1; }
     # Derive the matching C compiler.
-    case "$CXX" in
-        *clang++) CC="clang" ;;
-        *g++-14)  CC="gcc-14" ;;
-        *g++-13)  CC="gcc-13" ;;
-        *g++)     CC="gcc" ;;
-        *)        CC="cc" ;;
-    esac
+    CC="$(derive_cc_for "$CXX")"
     command -v "$CC" >/dev/null 2>&1 || CC="cc"
     # Suppress the GCC-15 -Wtemplate-body diagnostic for Hyprland (GCC only; GCC
     # silently ignores the unknown -Wno-* on versions that lack the warning).
