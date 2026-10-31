@@ -1,24 +1,34 @@
-# Hyprland install status — upstream 0.56.2 installed, 0.57.0 blocked on GCC 16
+# Hyprland install status — upstream 0.57.0 installed, built with g++-16
 
-**Status:** ✅ As of 2026-10-31 this machine runs **upstream Hyprland 0.56.2** from `/opt/hyprland`,
-registered in the `update-alternatives` group at priority 56. The apt package is still absent
-(removed 2026-08-17); the group therefore holds one candidate, not two.
+**Status:** ✅ As of 2026-10-31 this machine has **upstream Hyprland 0.57.0** at `/opt/hyprland`
+(tag `v0.57.0`, commit `0aa6745`), built from source with `g++-16` and registered in the
+`update-alternatives` group at priority 56. The 0.56.2 generation it replaced is retained at
+`/opt/hyprland.previous`. The apt package is still absent (removed 2026-08-17), so the group holds
+one candidate, not two.
 **Scope:** incident 1 (below) was a system problem that sysupdate merely reported. **Incident 2 was
 caused by this repo's own `setup-hyprland-alternatives.sh`** — see the fixes recorded there.
-**Incident 3** is the 0.57.0 upgrade: three attempts, each rolled back cleanly, now blocked on a
-toolchain gap rather than on dependencies — see "Why v0.57.0 does not build here" below.
+**Incident 3** is the 0.57.0 upgrade: four attempts, three rolled back cleanly by the incident-2
+guard, each failing on a different and more interesting thing than the last.
 
 | What | Expected path | State on 2026-10-31 |
 | --- | --- | --- |
-| apt build | `/usr/bin/Hyprland` | absent — `apt remove -y hyprland` removed `0.53.3+ds-4` on 2026-08-17 (candidate `0.53.3+ds-4`) |
-| upstream build | `/opt/hyprland/bin/Hyprland` | **present** — `Hyprland 0.56.2` (commit `efb5099`), with aquamarine 0.14.0 / hyprutils 0.14.0 / hyprgraphics 0.5.1 in its `lib/` |
-| previous generation | `/opt/hyprland.previous/bin/Hyprland` | present, retained by `commit_prefix` — but **not runnable in place**, see the note under incident 3 |
-| generic link | `/usr/local/bin/Hyprland` | → `/etc/alternatives/Hyprland` → `/opt/hyprland/bin/Hyprland` |
-| alternatives group | — | `Status: auto`, 1 candidate (`/opt/hyprland/bin/Hyprland`, priority 56), slaves `hyprctl` + `hyprpm` |
+| apt build | `/usr/bin/Hyprland` | absent — `apt remove -y hyprland` removed `0.53.3+ds-4` on 2026-08-17 |
+| upstream build | `/opt/hyprland/bin/Hyprland` | **`Hyprland 0.57.0`**, 138 shared libs all resolving, needs `GLIBCXX_3.4.35` |
+| its dependencies | `/opt/hyprland/lib`, `/opt/hyprland/share` | aquamarine 0.15.1, hyprutils 0.14.3, hyprgraphics 0.5.1, hyprland-protocols 0.8.0, wayland-protocols 1.50 |
+| previous generation | `/opt/hyprland.previous/bin/Hyprland` | the 0.56.2 build — present, **not runnable in place**, see the note under incident 3 |
+| generic link | `/usr/local/bin/Hyprland` | → `/etc/alternatives/Hyprland` → `/opt/hyprland/bin/Hyprland` (0.57.0) |
+| alternatives group | — | `Status: auto`, 1 candidate at priority 56, slaves `hyprctl` + `hyprpm` |
+| greeter session entry | `/usr/local/share/wayland-sessions/hyprland.desktop` | present (Dec 2025, from the old `/usr/local` source install), `Exec=Hyprland` — a bare PATH launch, so it follows the alternatives link |
+
+**Nothing was running Hyprland during any of this.** The session on this machine is GNOME
+(`XDG_CURRENT_DESKTOP=ubuntu:GNOME`, wayland), there is no `Hyprland` process and no
+`/run/user/1000/hypr` instance, which is why four rebuilds could swap `/opt/hyprland` underneath
+without consequence. 0.57.0 takes effect the next time the Hyprland session is selected at the
+greeter.
 
 ---
 
-## Incident 3 (2026-10-31) — v0.57.0 needs `libcanberra-dev`, and the rollback held
+## Incident 3 (2026-10-31) — the 0.57.0 upgrade: four attempts, four different causes
 
 ### What happened
 
@@ -80,7 +90,8 @@ the build never needed. Behaviour cover (including that case) is in
 
 ### What a v0.57.0 attempt needs
 
-Measured on 2026-10-31. v0.57.0's minimums come from its `CMakeLists.txt`:
+Measured on 2026-10-31, **before** the upgrade — what is installed now is in "How it was
+unblocked" below. v0.57.0's minimums come from its `CMakeLists.txt`:
 
 | Module | Required by 0.57.0 | On this machine | Source |
 | --- | --- | --- | --- |
@@ -117,7 +128,7 @@ from scratch, so building only the dependency that failed leaves the other four 
 configure fails on one of them. `explain_configure_failure` therefore prints the union of
 `DEPS_DEFAULT` and whatever was unsatisfied, never the failing module alone.
 
-### Why v0.57.0 does not build here: one C++26 call
+### Why v0.57.0 would not build: one C++26 call
 
 With the dependency chain satisfied, the third attempt reached the compositor itself and stopped at
 47%:
@@ -144,7 +155,7 @@ So this is a toolchain gap, not a Hyprland bug and not a dependency problem. The
 already in place: the `libstdc++6` on this machine *is* GCC 16's, which is why nothing else noticed
 that the compiler is a major version behind its own runtime library.
 
-The route, untested as of this writing:
+The route, which worked — see the next section for the verification:
 
 ```bash
 sudo apt-get install -y g++-16
@@ -166,14 +177,53 @@ The alternatives, for the record:
   shim rather than editing upstream source — see the `std::ranges::starts_with` compat header — and
   a member function cannot be shimmed that way, so this would be the first real source patch.
 
+### How it was unblocked: g++-16
+
+Installing the newer compiler and pointing the script at it was enough — no source patch, no change
+to the dependency set:
+
+```bash
+sudo apt-get install -y g++-16 gcc-16
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps --cxx g++-16
+```
+
+Checked before spending fifteen minutes on a build, because the two previous attempts were lost to
+inference:
+
+```
+g++-16 (Ubuntu 16-20260322-1ubuntu1) 16.0.1 20260322 (experimental) [trunk r16-8246-g569ace1fa50]
+__cpp_lib_string_subview: defined
+std::string_view v = s.subview(1,2);   compiles
+```
+
+The run took 585 s end to end — four dependencies plus the compositor, all built with the same
+`g++-16` so everything under `/opt/hyprland` links one libstdc++. Verified afterwards:
+
+| Check | Result |
+| --- | --- |
+| `/opt/hyprland/bin/Hyprland --version` | `Hyprland 0.57.0`, tag `v0.57.0`, commit `0aa6745` |
+| `ldd` | 138 libraries, none missing |
+| libstdc++ symbols required | up to `GLIBCXX_3.4.35` — the GCC 16 runtime, which was already installed |
+| alternatives | `auto`, value `/opt/hyprland/bin/Hyprland` |
+| `command -v Hyprland` → version | `/usr/local/bin/Hyprland` → 0.57.0 |
+| previous generation | 0.56.2 retired to `/opt/hyprland.previous` by `commit_prefix` |
+| leftovers | no `/opt/hyprland.rollback.*`, no `/tmp/hyprland-build-*` |
+
+Note that `g++-16` describes itself as *experimental trunk* — it is what Ubuntu resolute ships
+today, and it is the same snapshot the installed `libstdc++6` was built from, so compiler and
+runtime now match. Once the distro's default `g++` reaches 16, `--cxx` will no longer be needed.
+
 ### Note: `/opt/hyprland.previous` does not run in place
 
 `commit_prefix` keeps one generation, but the binaries are linked with an absolute
 `RUNPATH=/opt/hyprland/lib`, so the retired copy looks for its libraries in the *live* prefix:
 
 ```
-$ /opt/hyprland.previous/bin/Hyprland --version
+# with 0.56.2 live and the newer build retired:
 error while loading shared libraries: libaquamarine.so.14: cannot open shared object file
+# and again after the 0.57.0 upgrade, with the generations the other way round:
+$ /opt/hyprland.previous/bin/Hyprland --version
+error while loading shared libraries: libaquamarine.so.13: cannot open shared object file
 ```
 
 The libraries are there (`/opt/hyprland.previous/lib/libaquamarine.so.14` exists) — only the path
