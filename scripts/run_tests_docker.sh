@@ -4,7 +4,11 @@
 #
 # Mirrors the three CI workflows (ci-bash, ci-integration, ci-web) in one
 # throwaway container so the full suite can be exercised on any machine that has
-# Docker, without installing bats/yq/shellcheck/node locally.
+# Docker, without installing bats/yq/shellcheck/lsof/node locally.
+#
+# The suites run as the image's unprivileged `node` user, because CI runs as
+# GitHub's `runner` user and both system_update.sh and web/run_app.sh refuse to
+# run as root.
 #
 # Suites (in order):
 #   1. bash -n syntax check + ShellCheck        (ci-bash: lint)
@@ -27,7 +31,7 @@
 # Environment:
 #   NODE_IMAGE   Base image to use (default: node:26-bookworm). node:26 is
 #                Debian-based, matching web/.node-version (26.3.0) and giving
-#                apt access to bats/yq/shellcheck.
+#                apt access to bats/yq/shellcheck/lsof.
 
 set -euo pipefail
 
@@ -71,10 +75,32 @@ set -euo pipefail
 
 section() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 
-section "Installing test dependencies (bats, yq, shellcheck)"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq bats yq shellcheck >/dev/null
+# Two phases in one script. As root: install the test tooling and hand the tree
+# to an unprivileged user. As that user: run the suites.
+#
+# Both system_update.sh and web/run_app.sh refuse to run as root on purpose, so
+# a root run turns most of tests/integration/ red. CI never hits this because
+# GitHub runners execute as the unprivileged `runner` user; mirror that here by
+# re-entering this same script as the image's `node` user (uid 1000).
+if [ "$(id -u)" -eq 0 ]; then
+    section "Installing test dependencies (bats, yq, shellcheck, lsof)"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    # lsof: tests/integration/launcher_port_reuse.bats asks which pid holds a
+    # port, as ci-integration.yml's `apt-get install -y bats lsof` does.
+    apt-get install -y -qq bats yq shellcheck lsof >/dev/null
+
+    section "Dropping to unprivileged user (node)"
+    chown -R node:node /work
+    exec runuser -u node -- env \
+        HOME=/home/node \
+        PATH="$PATH" \
+        RUN_BASH="${RUN_BASH:-true}" \
+        RUN_INTEGRATION="${RUN_INTEGRATION:-true}" \
+        RUN_WEB="${RUN_WEB:-true}" \
+        CI="${CI:-}" \
+        bash -euo pipefail -c "$SYSUPDATE_TEST_RUNNER"
+fi
 
 cd /work
 
