@@ -38,7 +38,9 @@
 # Default list: hyprutils, hyprgraphics (hyprwm/<dep>, CMake, RPATH-isolated) and
 # wayland-protocols (freedesktop — apt has 1.47, Hyprland needs >=1.49; installed
 # data-only: XML tree + a .pc, no meson/wayland-scanner build).
-# Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev.
+# Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev
+# libcanberra-dev (new in 0.57.0). A failed configure now names the exact
+# apt package or --with-deps list to use, so you do not have to guess.
 #
 # Idempotent AND atomic: safe to re-run. The existing /opt/hyprland is moved aside
 # before a rebuild and restored automatically if the build fails, so a broken build
@@ -79,6 +81,7 @@ DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics"
 # pkg-config + cmake search paths for anything we build into the isolated prefix,
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
 DEST_PKGCFG="$DEST/lib/pkgconfig:$DEST/lib/x86_64-linux-gnu/pkgconfig:$DEST/share/pkgconfig"
+CONFIG_LOG_KEEP="/tmp/hyprland-configure-failed.log"  # survives the build dir cleanup
 
 #-------------------------- arg parsing --------------------------
 while [ $# -gt 0 ]; do
@@ -321,6 +324,151 @@ build_one_dep() {
     esac
 }
 
+#-------------------------- explaining a failed configure --------------------------
+# A failed CMake configure has two unrelated causes that need opposite fixes: a
+# hypr* library too old or absent (build it from source into $DEST, minutes) and
+# a plain -dev package that was never installed (one apt-get, seconds). The CMake
+# output says which; read it instead of printing both and leaving the reader to
+# guess. v0.57.0 added a `libcanberra` module to Hyprland's pkg_check_modules
+# call, and the old generic message pointed at a source build of the whole hypr*
+# stack for a missing libcanberra-dev.
+#
+# pkg-config module names are not apt package names, and on a machine that lacks
+# the package nothing can map one to the other: `dpkg -S` only knows installed
+# files and apt-file is not installed by default. Hence the explicit table, over
+# the modules Hyprland and the hypr* deps ask for; anything missing from it falls
+# back to an apt-file hint rather than a wrong guess.
+SOURCE_BUILDABLE="hyprutils hyprlang hyprcursor hyprgraphics hyprwayland-scanner aquamarine hyprland-protocols wayland-protocols"
+
+apt_dev_package_for() {
+    case "$1" in
+        libcanberra)         echo "libcanberra-dev" ;;
+        xkbcommon)           echo "libxkbcommon-dev" ;;
+        uuid)                echo "uuid-dev" ;;
+        wayland-server|wayland-client|wayland-cursor|wayland-egl)
+                             echo "libwayland-dev" ;;
+        cairo)               echo "libcairo2-dev" ;;
+        pango|pangocairo)    echo "libpango1.0-dev" ;;
+        pixman-1)            echo "libpixman-1-dev" ;;
+        xcursor)             echo "libxcursor-dev" ;;
+        libdrm)              echo "libdrm-dev" ;;
+        libinput)            echo "libinput-dev" ;;
+        libeis-1.0)          echo "libeis-dev" ;;
+        gbm)                 echo "libgbm-dev" ;;
+        gio-2.0|glib-2.0)    echo "libglib2.0-dev" ;;
+        re2)                 echo "libre2-dev" ;;
+        muparser)            echo "libmuparser-dev" ;;
+        lcms2)               echo "liblcms2-dev" ;;
+        libseat)             echo "libseat-dev" ;;
+        libdisplay-info)     echo "libdisplay-info-dev" ;;
+        libjpeg|libwebp|libmagic|librsvg-2.0|libspng)
+                             echo "lib${1#lib}-dev" ;;
+        *)                   echo "" ;;
+    esac
+}
+
+# explain_configure_failure <cmake-log> — name the modules that were not
+# satisfied and give the one command that fixes each class of them.
+explain_configure_failure() {
+    local log="$1" name pkg
+    # Not $0: this function is also reached with the script sourced (the
+    # SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY seam), where $0 is "bash".
+    local self="${BASH_SOURCE[0]}"
+    local unsatisfied="" from_source="" from_apt="" unmapped=""
+
+    # CMake prints a summary list for a REQUIRED pkg_check_modules failure:
+    #
+    #   The following required packages were not found:
+    #
+    #      - aquamarine>=0.15.0
+    #
+    # That list is the only reliable evidence of a REQUIRED module, so prefer it.
+    # A bare "Package 'x' not found" line is NOT such evidence: Hyprland probes
+    # optional modules the same way and handles them. Measured on a real v0.57.0
+    # log, "--   Package 'udis86' not found" is followed by "falling back to
+    # subproject" — an earlier version of this function told the reader to go
+    # hunting for a udis86 apt package that the build never needed.
+    #
+    # Both parses below end in `|| true`: they run under the script's
+    # `set -euo pipefail`, where a grep that matches nothing fails the pipeline
+    # and errexit would kill this function before it printed anything. That is
+    # not hypothetical — it is how a configure failure with no pkg-config module
+    # in the log (a compile error, say) came out completely silent.
+    unsatisfied="$(sed -n '/The following required packages were not found/,/Call Stack/p' "$log" 2>/dev/null \
+                    | grep -oE "^[[:space:]]+- [A-Za-z0-9_.+-]+([<>=]+[0-9.]+)?[[:space:]]*$" \
+                    | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[<>=].*$//' \
+                    | sed '/^$/d' | sort -u || true)"
+
+    # No summary list: an older CMake, or a failure reported only by pkg-config
+    # itself. Fall back to its three wordings — absent, and two "too old" forms.
+    if [ -z "$unsatisfied" ]; then
+        unsatisfied="$( { grep -oE "Package '[^']+' not found" "$log"
+                          grep -oE "Package dependency requirement '[^']+'" "$log"
+                          grep -oE "Requested '[^']+'" "$log"
+                        } 2>/dev/null \
+                        | sed -E "s/^Package '//
+                                  s/' not found$//
+                                  s/^Package dependency requirement '//
+                                  s/^Requested '//
+                                  s/'$//" \
+                        | awk '{print $1}' \
+                        | sed -E 's/[<>=].*$//; /^$/d' \
+                        | sort -u || true)"
+    fi
+
+    for name in $unsatisfied; do
+        case " $SOURCE_BUILDABLE " in
+            *" $name "*) from_source="$from_source $name"; continue ;;
+        esac
+        pkg="$(apt_dev_package_for "$name")"
+        if [ -n "$pkg" ]; then
+            from_apt="$from_apt $pkg"
+        else
+            unmapped="$unmapped $name"
+        fi
+    done
+    from_apt="$(echo "$from_apt" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')"
+
+    echo "error: CMake configuration failed — the Hyprland dependency chain is not satisfiable." >&2
+    if [ -n "$unsatisfied" ]; then
+        echo "       Unsatisfied pkg-config modules for $REF: $(echo $unsatisfied)" >&2
+    fi
+
+    if [ -n "$from_apt" ]; then
+        echo "       Missing -dev packages. Install them and re-run this script:" >&2
+        echo "         sudo apt-get install -y ${from_apt% }" >&2
+    fi
+    if [ -n "$from_source" ]; then
+        echo "       hypr* libraries too old or absent in apt. Build them into $DEST:" >&2
+        echo "         sudo bash $self --with-deps=$(echo "${from_source# }" | tr ' ' ',')" >&2
+    fi
+    if [ -n "$unmapped" ]; then
+        echo "       No known apt package for:${unmapped}. Find what ships <module>.pc with:" >&2
+        echo "         sudo apt-get install -y apt-file && sudo apt-file update" >&2
+        for name in $unmapped; do
+            echo "         apt-file search $name.pc" >&2
+        done
+    fi
+    if [ -z "$unsatisfied" ]; then
+        # Not a pkg-config failure — fall back to the generic dependency advice.
+        cat >&2 <<EOF
+       Nothing in the log names an unsatisfied pkg-config module, so this is not
+       a missing-dependency failure. Building upstream $REF needs matching
+       versions of the hypr* stack, e.g.:
+         hyprutils, hyprlang, hyprcursor, hyprgraphics, hyprwayland-scanner,
+         aquamarine, hyprland-protocols  (plus wayland/xkbcommon/pixman/cairo/pango/drm)
+       and a C++26-capable toolchain; read the CMake error above.
+         sudo bash $self --with-deps                       # builds: $DEPS_DEFAULT
+EOF
+    fi
+    # $build_root (and this log with it) is removed by cleanup_build on exit, so
+    # keep a copy the reader can still open after the run.
+    if cp -f "$log" "$CONFIG_LOG_KEEP" 2>/dev/null; then
+        echo "       Full configure log: $CONFIG_LOG_KEEP" >&2
+    fi
+    echo "       Upstream build docs: https://wiki.hyprland.org/Getting-Started/Installation/#manual-manual-build" >&2
+}
+
 #-------------------------- atomic prefix handling --------------------------
 # A rebuild must never leave the system with NO compositor. This script used to
 # `rm -rf "$DEST"` before building, so a failed build — or a failed dependency
@@ -466,7 +614,11 @@ if [ "$SKIP_BUILD" = false ]; then
 
     echo "    configuring (CMake, prefix=$DEST, RPATH=$DEST/lib) ..."
     # errexit off around the build so we can give an actionable dependency message.
+    # The output is teed because explain_configure_failure reads it back to say
+    # WHICH module was unsatisfied. 2>&1 folds cmake's stderr into that stream,
+    # so the whole configure output still reaches the terminal and the log.
     set +e
+    cfg_log="$build_root/cmake-configure.log"
     PKG_CONFIG_PATH="$DEST_PKGCFG:${PKG_CONFIG_PATH:-}" \
     cmake --no-warn-unused-cli \
         -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
@@ -476,22 +628,11 @@ if [ "$SKIP_BUILD" = false ]; then
         -DCMAKE_INSTALL_RPATH="$DEST/lib;$DEST/lib/x86_64-linux-gnu" \
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
         -DCMAKE_PREFIX_PATH="$DEST" \
-        -B "$build_root/build" -S "$build_root/src"
-    cfg_rc=$?
-    if [ $cfg_rc -ne 0 ]; then
+        -B "$build_root/build" -S "$build_root/src" 2>&1 | tee "$cfg_log"
+    cfg_rc=${PIPESTATUS[0]}
+    if [ "$cfg_rc" -ne 0 ]; then
         set -e
-        cat >&2 <<EOF
-error: CMake configuration failed — the Hyprland dependency chain is not satisfiable.
-       Building upstream $REF needs matching versions of the hypr* stack, e.g.:
-         hyprutils, hyprlang, hyprcursor, hyprgraphics, hyprwayland-scanner,
-         aquamarine, hyprland-protocols  (plus wayland/xkbcommon/pixman/cairo/pango/drm)
-       If a hypr* library is too old or missing in apt (a "requires >= X" or
-       "not found" pkg-config error above), build it from source into $DEST:
-         sudo bash $0 --with-deps                       # builds: $DEPS_DEFAULT
-         sudo bash $0 --with-deps=hyprutils,hyprgraphics # or a custom list
-       If instead a plain -dev package is missing, apt-install it and re-run.
-       Upstream build docs: https://wiki.hyprland.org/Getting-Started/Installation/#manual-manual-build
-EOF
+        explain_configure_failure "$cfg_log"
         exit 1
     fi
 
