@@ -22,6 +22,7 @@
 #   sudo bash setup-hyprland-alternatives.sh [--ref <tag>] [--jobs N]
 #   sudo bash setup-hyprland-alternatives.sh --with-deps      # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
 #   sudo bash setup-hyprland-alternatives.sh --with-deps=hyprutils,hyprgraphics  # custom dep list
+#   sudo bash setup-hyprland-alternatives.sh --with-deps=aquamarine@v0.14.0       # pin a dep to a tag
 #   sudo bash setup-hyprland-alternatives.sh --cxx clang++    # override the compiler (default: system g++)
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
@@ -39,7 +40,10 @@
 # data-only: XML tree + a .pc, no meson/wayland-scanner build).
 # Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev.
 #
-# Idempotent: safe to re-run (rebuilds /opt/hyprland and re-registers alternatives).
+# Idempotent AND atomic: safe to re-run. The existing /opt/hyprland is moved aside
+# before a rebuild and restored automatically if the build fails, so a broken build
+# can never leave you with no compositor. On success the old prefix is kept one
+# generation at /opt/hyprland.previous.
 set -euo pipefail
 
 #-------------------------- configuration --------------------------
@@ -65,6 +69,12 @@ WITH_DEPS=""                          # deps to build from source into $DEST (sp
 # may use it); aquamarine must be newer than apt's — Hyprland 0.56.2 uses
 # SBackendOptions::logConnection, added after apt's 0.9.3 (compile error otherwise).
 DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics"
+# VERSION SKEW: each name here resolves to that dep's LATEST release tag, while
+# Hyprland itself can be pinned with --ref. Building an older pinned Hyprland
+# against today's deps can fail to compile, or link against sonames that later
+# move — pin the deps too in that case, with "name@tag" entries:
+#   --with-deps=hyprutils@v0.14.0,wayland-protocols,aquamarine@v0.14.0
+# Unpinned names keep tracking latest, which is what you want for latest Hyprland.
 
 # pkg-config + cmake search paths for anything we build into the isolated prefix,
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
@@ -89,7 +99,7 @@ while [ $# -gt 0 ]; do
 done
 WITH_DEPS="${WITH_DEPS//,/ }"        # accept comma- or space-separated lists
 
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ] && [ -z "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
     echo "Run with sudo: sudo bash $0 [--ref <tag>] [--skip-build] [--remove]" >&2
     exit 1
 fi
@@ -107,7 +117,7 @@ fi
 # and the standard is C++26 — the name resolves fine at instantiation. So we pass
 # -Wno-template-body when building Hyprland with GCC, deferring the check.
 HYPRLAND_EXTRA_CXXFLAGS=""
-if [ "$SKIP_BUILD" = false ]; then
+if [ "$SKIP_BUILD" = false ] && [ -z "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
     [ -n "$CXX" ] || CXX="g++"
     command -v "$CXX" >/dev/null 2>&1 || { echo "error: C++ compiler '$CXX' not found" >&2; exit 1; }
     # Derive the matching C compiler.
@@ -173,14 +183,24 @@ fi
 # visible (via PKG_CONFIG_PATH) to later ones.
 build_hypr_dep() {
     local name="$1"
+    local pinned="${2:-}"
     local repo="https://github.com/hyprwm/$name.git"
 
     local ref
-    ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
-             | awk -F/ '{print $NF}' \
-             | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-             | sort -V | tail -1)"
-    [ -n "$ref" ] || { echo "error: could not resolve a release tag for '$name' (typo? no such hyprwm repo?)" >&2; return 1; }
+    if [ -n "$pinned" ]; then
+        # Explicit pin (name@ref). Verify the tag exists so the failure is a clear
+        # "no such tag" rather than an opaque clone error 200 lines later.
+        if ! git ls-remote --exit-code --tags --refs "$repo" "refs/tags/$pinned" >/dev/null 2>&1; then
+            echo "error: '$name' has no tag '$pinned' (see $repo tags)" >&2; return 1
+        fi
+        ref="$pinned"
+    else
+        ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
+                 | awk -F/ '{print $NF}' \
+                 | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+                 | sort -V | tail -1)"
+        [ -n "$ref" ] || { echo "error: could not resolve a release tag for '$name' (typo? no such hyprwm repo?)" >&2; return 1; }
+    fi
 
     echo "==> Building dependency $name $ref into $DEST"
     local d
@@ -227,14 +247,22 @@ build_hypr_dep() {
 # the XML tree (stable/staging/unstable, structure preserved) + a hand-written .pc
 # carrying the version and pkgdatadir. No meson, no wayland-scanner, no compile.
 build_wayland_protocols() {
+    local pinned="${1:-}"
     local repo="https://gitlab.freedesktop.org/wayland/wayland-protocols.git"
 
     local ref
-    ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
-             | awk -F/ '{print $NF}' \
-             | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-             | sort -V | tail -1)"
-    [ -n "$ref" ] || { echo "error: could not resolve a wayland-protocols release tag" >&2; return 1; }
+    if [ -n "$pinned" ]; then
+        if ! git ls-remote --exit-code --tags --refs "$repo" "refs/tags/$pinned" >/dev/null 2>&1; then
+            echo "error: wayland-protocols has no tag '$pinned'" >&2; return 1
+        fi
+        ref="$pinned"
+    else
+        ref="$(git ls-remote --tags --refs "$repo" 2>/dev/null \
+                 | awk -F/ '{print $NF}' \
+                 | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+                 | sort -V | tail -1)"
+        [ -n "$ref" ] || { echo "error: could not resolve a wayland-protocols release tag" >&2; return 1; }
+    fi
 
     echo "==> Installing wayland-protocols $ref into $DEST (data-only)"
     local d
@@ -280,14 +308,77 @@ PC
     echo "    installed wayland-protocols $ref (data-only) -> $pkgdatadir"
 }
 
-# Dispatch a dependency name to the right builder (hyprwm/cmake vs the special
-# non-hyprwm cases).
+# Dispatch a dependency spec to the right builder (hyprwm/cmake vs the special
+# non-hyprwm cases). A spec is "name" (latest release tag) or "name@ref" (pinned).
 build_one_dep() {
-    case "$1" in
-        wayland-protocols) build_wayland_protocols ;;
-        *)                 build_hypr_dep "$1" ;;
+    local spec="$1" name ref
+    name="${spec%%@*}"
+    ref=""
+    [ "$spec" != "$name" ] && ref="${spec#*@}"
+    case "$name" in
+        wayland-protocols) build_wayland_protocols "$ref" ;;
+        *)                 build_hypr_dep "$name" "$ref" ;;
     esac
 }
+
+#-------------------------- atomic prefix handling --------------------------
+# A rebuild must never leave the system with NO compositor. This script used to
+# `rm -rf "$DEST"` before building, so a failed build — or a failed dependency
+# build — destroyed a working install. On 2026-10-28 that is exactly what
+# happened here: the running Hyprland was deleted from disk, the replacement
+# never finished building, and the machine had nothing to log back into (see
+# docs/hyprland-status.md).
+#
+# Instead: move the existing prefix aside (a rename on the same filesystem, so
+# it is instant and a running compositor keeps its open inodes), build into a
+# fresh $DEST, and on ANY failure put the old prefix back. On success keep one
+# generation at $DEST.previous so a bad upgrade can be rolled back by hand.
+PREFIX_BACKUP=""           # set once the old prefix has been moved aside
+PREFIX_COMMITTED=false     # set once the new build has been validated
+
+stage_prefix() {
+    if [ -e "$DEST" ]; then
+        PREFIX_BACKUP="$DEST.rollback.$$"
+        rm -rf "$PREFIX_BACKUP"
+        mv "$DEST" "$PREFIX_BACKUP"
+        echo "    existing prefix moved aside -> $PREFIX_BACKUP (restored automatically if this run fails)"
+    fi
+    mkdir -p "$DEST"
+}
+
+# Runs from the EXIT trap: undo the move unless this run committed a good build.
+rollback_prefix() {
+    [ "$PREFIX_COMMITTED" = true ] && return 0
+    [ -n "$PREFIX_BACKUP" ] && [ -d "$PREFIX_BACKUP" ] || return 0
+    echo "==> This run did not produce a working build — restoring the previous $DEST" >&2
+    rm -rf "$DEST"
+    mv "$PREFIX_BACKUP" "$DEST"
+    PREFIX_BACKUP=""
+    echo "    restored. The compositor you had before this run is back in place." >&2
+}
+
+# Runs once the new build is validated: retire the backup to $DEST.previous.
+commit_prefix() {
+    PREFIX_COMMITTED=true
+    [ -n "$PREFIX_BACKUP" ] && [ -d "$PREFIX_BACKUP" ] || return 0
+    rm -rf "$DEST.previous"
+    mv "$PREFIX_BACKUP" "$DEST.previous"
+    PREFIX_BACKUP=""
+    echo "    previous prefix kept at $DEST.previous (delete it once you are happy)"
+}
+
+# Test seam, mirroring web/run_app.sh. `SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1
+# source setup-hyprland-alternatives.sh` stops here with only the helpers above
+# defined, so the prefix staging/rollback can be exercised directly
+# (tests/bash/hyprland_setup_prefix.bats) instead of inferred from a real root
+# build. Nothing below this line — no removal, no build, no update-alternatives
+# — runs under the flag, and the script never sets it itself.
+if [ -n "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
+    # `return` works when sourced (how the tests use this) and fails when the
+    # file was executed, where `exit` is the right way out.
+    # shellcheck disable=SC2317  # reached when `return` fails, i.e. not sourced
+    return 0 2>/dev/null || exit 0
+fi
 
 #-------------------------- --remove --------------------------
 if [ "$DO_REMOVE" = true ]; then
@@ -312,10 +403,14 @@ if [ "$SKIP_BUILD" = false ]; then
         [ -n "$REF" ] || { echo "error: could not resolve latest Hyprland tag; pass --ref <tag>" >&2; exit 1; }
     fi
 
+    # Arm the rollback BEFORE anything destructive happens, so a failure in a
+    # dependency build (not just in Hyprland itself) also restores the old prefix.
+    trap 'rollback_prefix; [ -n "${build_root:-}" ] && rm -rf "$build_root"; [ -n "${RANGES_SHIM:-}" ] && rm -f "$RANGES_SHIM"; true' EXIT
+
     # Fresh isolated prefix, then build any requested hypr* deps into it FIRST so
     # the Hyprland configure below finds them (via PKG_CONFIG_PATH) instead of apt's.
     echo "==> Preparing isolated prefix $DEST"
-    rm -rf "$DEST"
+    stage_prefix
     if [ -n "$WITH_DEPS" ]; then
         echo "==> Building dependencies into $DEST: $WITH_DEPS"
         for dep in $WITH_DEPS; do
@@ -328,8 +423,9 @@ if [ "$SKIP_BUILD" = false ]; then
 
     echo "==> Building upstream Hyprland $REF into $DEST (isolated prefix)"
 
+    # NB: no `trap ... EXIT` here — the rollback trap armed above already cleans
+    # up $build_root and the shim. Re-arming it would silently drop the rollback.
     build_root="$(mktemp -d /tmp/hyprland-build-XXXXXX)"
-    trap 'rm -rf "$build_root"; [ -n "${RANGES_SHIM:-}" ] && rm -f "$RANGES_SHIM"' EXIT
 
     echo "    cloning $REF ..."
     if ! git clone --recursive --depth 1 --branch "$REF" "$REPO" "$build_root/src" 2>&1 | tail -3; then
@@ -396,13 +492,30 @@ if [ ! -x "$UP_HYPR" ]; then
     exit 1
 fi
 # Confirm it resolves its own libraries (no /usr/lib hypr* fallback that could break on apt upgrade).
+# A binary with unresolved libraries cannot start, so for a build WE just made this
+# is a failed build, not a warning: fall through to the EXIT trap, which restores
+# the previous prefix. With --skip-build the prefix is the user's own, so warn only.
 if ldd "$UP_HYPR" 2>/dev/null | grep -q 'not found'; then
-    echo "warning: '$UP_HYPR' has unresolved libraries:" >&2
+    echo "error: '$UP_HYPR' has unresolved libraries:" >&2
     ldd "$UP_HYPR" | grep 'not found' >&2
-    echo "         the upstream build is not self-contained; fix its RPATH/deps before relying on it." >&2
+    if [ "$SKIP_BUILD" = false ]; then
+        echo "       this build cannot start. Its dependencies in $DEST do not match the" >&2
+        echo "       sonames it was linked against — usually dep/Hyprland version skew." >&2
+        echo "       Pin the deps to versions contemporary with $REF, e.g.:" >&2
+        echo "         sudo bash $0 --ref $REF --with-deps=hyprutils@v0.14.0,aquamarine@v0.14.0" >&2
+        exit 1
+    fi
+    echo "       the upstream build is not self-contained; fix its RPATH/deps before relying on it." >&2
 fi
 up_ver="$("$UP_HYPR" --version 2>/dev/null | head -1 || true)"
+if [ "$SKIP_BUILD" = false ] && [ -z "$up_ver" ]; then
+    echo "error: '$UP_HYPR' was built but cannot report its version — treating as a failed build" >&2
+    exit 1
+fi
 echo "    upstream: $UP_HYPR -> ${up_ver:-<version unreadable>}"
+
+# The new prefix holds a binary that starts and resolves every library: keep it.
+commit_prefix
 
 # Resolve upstream slave paths (fall back to the master's bin dir).
 UP_HYPRCTL="$DEST/bin/hyprctl"; [ -x "$UP_HYPRCTL" ] || UP_HYPRCTL=""
