@@ -94,7 +94,7 @@ Installing the apt build first is the safer order: it gives a working compositor
 apt candidate (priority 53) that the alternatives group is designed around.
 
 Regression cover for the rollback and the dep pinning lives in
-[`tests/bash/hyprland_setup_prefix.bats`](../tests/bash/hyprland_setup_prefix.bats).
+[`tests/integration/hyprland_setup_prefix.bats`](../tests/integration/hyprland_setup_prefix.bats).
 
 ---
 

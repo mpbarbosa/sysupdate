@@ -580,11 +580,17 @@ update_hyprland() {
                 local restore_version
                 restore_version=$(get_github_latest_version \
                     "$(get_config version.github_owner)" "$(get_config version.github_repo)")
-                if hyprland_is_alternatives_managed; then
-                    perform_hyprland_alternatives_update "$restore_version"
-                else
-                    perform_hyprland_update "$restore_version"
-                fi
+                # Always the isolated-prefix flow here, never the legacy p/g/s
+                # chooser. The prompt above promises a rebuild into
+                # $HYPRLAND_UPSTREAM_PREFIX, whereas perform_hyprland_update offers
+                # a package-manager install or a /usr/local source build — either of
+                # which can report success while the managed install it was asked to
+                # restore stays broken. This branch is reachable with no alternatives
+                # group registered (a dangling generic link or a leftover prefix is
+                # enough) and works there: hyprland_alt_upstream_target resolves to
+                # $HYPRLAND_UPSTREAM_PREFIX/bin/Hyprland, and the setup script
+                # registers the group itself once the build lands.
+                perform_hyprland_alternatives_update "$restore_version"
             fi
         fi
         ask_continue
