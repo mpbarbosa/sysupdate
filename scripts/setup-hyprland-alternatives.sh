@@ -88,7 +88,10 @@ DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics hyprland-proto
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
 DEST_PKGCFG="$DEST/lib/pkgconfig:$DEST/lib/x86_64-linux-gnu/pkgconfig:$DEST/share/pkgconfig"
 CONFIG_LOG_KEEP="/tmp/hyprland-configure-failed.log"  # survives the build dir cleanup
-BUILD_LOG_KEEP="/tmp/hyprland-build-failed.log"          # ditto, for the compile
+BUILD_LOG_KEEP="/tmp/hyprland-failed-build.log"          # ditto, for the compile
+# NB: deliberately not hyprland-build-*.log — the build trees are
+# /tmp/hyprland-build-XXXXXX, so that name would put the one diagnostic a
+# failed run leaves behind inside the glob anyone would use to sweep them.
 
 #-------------------------- arg parsing --------------------------
 while [ $# -gt 0 ]; do
