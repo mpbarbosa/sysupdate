@@ -357,6 +357,37 @@ rollback_prefix() {
     echo "    restored. The compositor you had before this run is back in place." >&2
 }
 
+# Everything the build must undo, on every exit path. rollback_prefix is
+# idempotent — it clears PREFIX_BACKUP once it has restored — so running this
+# more than once is harmless.
+cleanup_build() {
+    rollback_prefix
+    [ -n "${build_root:-}" ] && rm -rf "$build_root"
+    [ -n "${RANGES_SHIM:-}" ] && rm -f "$RANGES_SHIM"
+    true
+}
+
+# Arm the rollback for every way this script can stop, signals included.
+#
+# Measured on bash 5.x rather than assumed, with only an EXIT trap armed:
+#   * untrapped SIGTERM -> shell exits 143 and the EXIT trap DOES run, so the
+#     TERM line below is redundant. It is kept for symmetry and because
+#     web/run_app.sh arms EXIT INT TERM, making the intent explicit at the
+#     cost of nothing.
+#   * untrapped SIGINT delivered to the shell alone -> the shell does NOT exit
+#     and the EXIT trap does NOT run. The INT line is what makes that path
+#     clean up, by turning the signal into a plain `exit` so the EXIT trap runs.
+#
+# A real Ctrl-C signals the whole foreground process group, not the shell alone,
+# which is a third case this has NOT measured — it may well already unwind
+# correctly. So treat this as making the coverage explicit, not as a fix for a
+# demonstrated outage.
+arm_build_rollback() {
+    trap cleanup_build EXIT
+    trap 'exit 130' INT     # 128 + SIGINT
+    trap 'exit 143' TERM    # 128 + SIGTERM
+}
+
 # Runs once the new build is validated: retire the backup to $DEST.previous.
 commit_prefix() {
     PREFIX_COMMITTED=true
@@ -405,7 +436,7 @@ if [ "$SKIP_BUILD" = false ]; then
 
     # Arm the rollback BEFORE anything destructive happens, so a failure in a
     # dependency build (not just in Hyprland itself) also restores the old prefix.
-    trap 'rollback_prefix; [ -n "${build_root:-}" ] && rm -rf "$build_root"; [ -n "${RANGES_SHIM:-}" ] && rm -f "$RANGES_SHIM"; true' EXIT
+    arm_build_rollback
 
     # Fresh isolated prefix, then build any requested hypr* deps into it FIRST so
     # the Hyprland configure below finds them (via PKG_CONFIG_PATH) instead of apt's.

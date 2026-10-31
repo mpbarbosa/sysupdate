@@ -204,3 +204,30 @@ show() { echo "$1=$(cat "$2" 2>/dev/null || echo MISSING)"; }
     [ "$status" -eq 0 ]
     [ "$output" = "wayland ref=1.49" ]
 }
+
+# ---------------------------------------------------------------------------
+# cleanup_build / arm_build_rollback
+#
+# Deliberately NOT a behavioural signal test. One was written and discarded: it
+# passed whether or not the INT/TERM traps were armed, so it asserted nothing.
+# Two measured reasons it cannot work in a harness:
+#   * untrapped SIGTERM already runs the EXIT trap, so there is no difference
+#     to detect on that signal;
+#   * SIGINT cannot be delivered to a child a non-interactive shell backgrounded
+#     — such a child has SIGINT set to ignore (`SigIgn` 0x6 in
+#     /proc/<pid>/status) and bash cannot trap a signal ignored on entry.
+# What remains testable is that the trap table is armed and actually called,
+# which is what this covers. A test that cannot fail is worse than no test.
+# ---------------------------------------------------------------------------
+
+@test "cleanup_build: the rollback is armed for EXIT, INT and TERM" {
+    run grep -cE "^[[:space:]]+trap (cleanup_build EXIT|'exit 130' INT|'exit 143' TERM)([[:space:]]|\$)" "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "3" ]
+}
+
+@test "cleanup_build: the build section calls arm_build_rollback" {
+    run grep -c "^[[:space:]]*arm_build_rollback\$" "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
