@@ -35,9 +35,11 @@
 #
 # --with-deps builds/installs the latest release of each named dep into
 # /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
-# Default list: hyprutils, hyprgraphics (hyprwm/<dep>, CMake, RPATH-isolated) and
-# wayland-protocols (freedesktop — apt has 1.47, Hyprland needs >=1.49; installed
-# data-only: XML tree + a .pc, no meson/wayland-scanner build).
+# Default list: hyprutils, hyprgraphics, aquamarine, hyprland-protocols
+# (hyprwm/<dep>, CMake, RPATH-isolated — hyprland-protocols is data-only but still
+# a CMake project, so it needs no special case; apt has 0.7.0 and 0.57.0 needs
+# >=0.8.0) and wayland-protocols (freedesktop — apt has 1.47, Hyprland needs
+# >=1.49; installed data-only: XML tree + a .pc, no meson/wayland-scanner build).
 # Also apt-install these first if missing: glslang-dev libinput-dev libeis-dev
 # libcanberra-dev (new in 0.57.0). A failed configure now names the exact
 # apt package or --with-deps list to use, so you do not have to guess.
@@ -70,7 +72,7 @@ WITH_DEPS=""                          # deps to build from source into $DEST (sp
 # hyprutils first (everything needs it); wayland-protocols before aquamarine (which
 # may use it); aquamarine must be newer than apt's — Hyprland 0.56.2 uses
 # SBackendOptions::logConnection, added after apt's 0.9.3 (compile error otherwise).
-DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics"
+DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics hyprland-protocols"
 # VERSION SKEW: each name here resolves to that dep's LATEST release tag, while
 # Hyprland itself can be pinned with --ref. Building an older pinned Hyprland
 # against today's deps can fail to compile, or link against sonames that later
@@ -82,6 +84,7 @@ DEPS_DEFAULT="hyprutils wayland-protocols aquamarine hyprgraphics"
 # so the Hyprland configure (and later deps) find OUR fresh builds before apt's.
 DEST_PKGCFG="$DEST/lib/pkgconfig:$DEST/lib/x86_64-linux-gnu/pkgconfig:$DEST/share/pkgconfig"
 CONFIG_LOG_KEEP="/tmp/hyprland-configure-failed.log"  # survives the build dir cleanup
+BUILD_LOG_KEEP="/tmp/hyprland-build-failed.log"          # ditto, for the compile
 
 #-------------------------- arg parsing --------------------------
 while [ $# -gt 0 ]; do
@@ -439,8 +442,19 @@ explain_configure_failure() {
         echo "         sudo apt-get install -y ${from_apt% }" >&2
     fi
     if [ -n "$from_source" ]; then
+        # Name the WHOLE dependency set, not only what failed this time. Every run
+        # rebuilds the prefix from scratch (stage_prefix), so --with-deps=aquamarine
+        # on its own would drop hyprutils, wayland-protocols and the rest, and the
+        # next configure would fail on one of those instead. Measured: that is what
+        # the first cut of this message advised for an unsatisfied
+        # hyprland-protocols.
+        local deps_arg="" dep
+        for dep in $DEPS_DEFAULT $from_source; do
+            case ",$deps_arg," in *",$dep,"*) continue ;; esac
+            deps_arg="${deps_arg:+$deps_arg,}$dep"
+        done
         echo "       hypr* libraries too old or absent in apt. Build them into $DEST:" >&2
-        echo "         sudo bash $self --with-deps=$(echo "${from_source# }" | tr ' ' ',')" >&2
+        echo "         sudo bash $self --with-deps=$deps_arg" >&2
     fi
     if [ -n "$unmapped" ]; then
         echo "       No known apt package for:${unmapped}. Find what ships <module>.pc with:" >&2
@@ -640,11 +654,20 @@ if [ "$SKIP_BUILD" = false ]; then
     # Build ALL default targets, not just the Hyprland compositor: `cmake --install`
     # installs hyprctl and hyprpm too (and the alternatives group registers them as
     # slaves), so they must be built or the install step fails ("cannot find hyprctl").
-    cmake --build "$build_root/build" --config Release -j"$JOBS"
-    build_rc=$?
-    if [ $build_rc -ne 0 ]; then
+    # Teed and kept for the same reason as the configure log: "see output above"
+    # is no help once the terminal that ran this is gone, and a compile failure
+    # otherwise left nothing behind at all — cleanup_build removes $build_root on
+    # the way out, so the only record was the scrollback.
+    build_log="$build_root/cmake-build.log"
+    cmake --build "$build_root/build" --config Release -j"$JOBS" 2>&1 | tee "$build_log"
+    build_rc=${PIPESTATUS[0]}
+    if [ "$build_rc" -ne 0 ]; then
         set -e
-        echo "error: compilation failed (see output above)" >&2
+        echo "error: compilation of $REF failed" >&2
+        grep -m3 -E '(^|[/ ])error:' "$build_log" 2>/dev/null | sed 's/^/       /' >&2 || true
+        if cp -f "$build_log" "$BUILD_LOG_KEEP" 2>/dev/null; then
+            echo "       Full build log: $BUILD_LOG_KEEP" >&2
+        fi
         exit 1
     fi
 
