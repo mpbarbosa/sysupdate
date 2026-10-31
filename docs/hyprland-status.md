@@ -86,6 +86,7 @@ Measured on 2026-10-31. v0.57.0's minimums come from its `CMakeLists.txt`:
 | `aquamarine` | ≥ 0.15.0 | 0.14.0 in `/opt/hyprland`, 0.9.3 in apt | **needs `--with-deps`** (latest tag `v0.15.1`) |
 | `hyprutils` | ≥ 0.14.3 | 0.14.0 in `/opt/hyprland`, 0.11.0 in apt | **needs `--with-deps`** (latest tag `v0.14.3`) |
 | `hyprgraphics` | ≥ 0.5.1 | 0.5.1 | ok (`--with-deps` rebuilds it anyway) |
+| `hyprland-protocols` | ≥ 0.8.0 | 0.7.0 in apt, nothing in `/opt/hyprland` | **needs `--with-deps`** (latest tag `v0.8.0`) |
 | `wayland-protocols` | ≥ 1.49 | 1.50 in `/opt/hyprland`, 1.47 in apt | **needs `--with-deps`** (apt is too old) |
 | `hyprlang` | ≥ 0.6.7 | 0.6.7 | ok, exactly at the minimum |
 | `hyprcursor` | ≥ 0.1.7 | 0.1.13 | ok |
@@ -97,11 +98,23 @@ Measured on 2026-10-31. v0.57.0's minimums come from its `CMakeLists.txt`:
 So the upgrade command is:
 
 ```bash
-sudo bash scripts/setup-hyprland-alternatives.sh --with-deps      # hyprutils wayland-protocols aquamarine hyprgraphics
+sudo bash scripts/setup-hyprland-alternatives.sh --with-deps
+# builds: hyprutils wayland-protocols aquamarine hyprgraphics hyprland-protocols
 ```
 
 Do **not** pin the deps to `@v0.14.0` tags here — that pinning is what the incident-2 notes recommend
 for rebuilding *0.56.2*, and aquamarine 0.14.0 is below 0.57.0's floor.
+
+`hyprland-protocols` joined `DEPS_DEFAULT` for this: apt ships 0.7.0 and 0.57.0 asks for ≥ 0.8.0, so
+the first attempt cleared `libcanberra` and the hypr* versions and then failed at
+`CMakeLists.txt:545` on a dependency the script did not know how to build. It needed no new builder —
+the project is data-only (protocol XMLs plus a configured `.pc`) but has been CMake-based since
+v0.8.0, so `build_hypr_dep` installs it unchanged.
+
+Also note what a `--with-deps=<one name>` suggestion would have cost: each run rebuilds the prefix
+from scratch, so building only the dependency that failed leaves the other four out and the next
+configure fails on one of them. `explain_configure_failure` therefore prints the union of
+`DEPS_DEFAULT` and whatever was unsatisfied, never the failing module alone.
 
 ### Note: `/opt/hyprland.previous` does not run in place
 

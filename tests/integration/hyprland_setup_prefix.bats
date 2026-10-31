@@ -197,6 +197,20 @@ show() { echo "$1=$(cat "$2" 2>/dev/null || echo MISSING)"; }
     [ "$output" = "hyprwm name=aquamarine ref=v0.14.0" ]
 }
 
+@test "build_one_dep: hyprland-protocols routes to the plain CMake builder" {
+    # Data-only, but a CMake project since v0.8.0 (XMLs + a configured .pc), so
+    # build_hypr_dep handles it as-is — verified by building v0.8.0 into a temp
+    # prefix, whose .pc satisfied `pkg-config --atleast-version=0.8.0`. It is in
+    # DEPS_DEFAULT because apt ships 0.7.0 and Hyprland v0.57.0 needs >= 0.8.0.
+    probe '
+        build_hypr_dep()          { echo "hyprwm name=$1 ref=${2:-<latest>}"; }
+        build_wayland_protocols() { echo "wayland ref=${1:-<latest>}"; }
+        build_one_dep "hyprland-protocols"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "hyprwm name=hyprland-protocols ref=<latest>" ]
+}
+
 @test "build_one_dep: wayland-protocols routes to its own data-only builder" {
     probe '
         build_hypr_dep()          { echo "hyprwm name=$1 ref=${2:-<latest>}"; }
@@ -295,8 +309,53 @@ Call Stack (most recent call first):
 EOF
     explain
     [ "$status" -eq 0 ]
-    [[ "$output" == *"--with-deps=aquamarine"* ]]
+    # The whole set, not just what failed: see the next two tests.
+    [[ "$output" == *"--with-deps=hyprutils,wayland-protocols,aquamarine,hyprgraphics,hyprland-protocols"* ]]
     [[ "$output" != *"apt-get install -y aquamarine"* ]]
+}
+
+@test "explain_configure_failure: the --with-deps advice carries the whole dep set" {
+    # Hyprland v0.57.0 wants hyprland-protocols >= 0.8.0 and apt ships 0.7.0.
+    # Advising --with-deps=hyprland-protocols alone would be wrong: every run
+    # rebuilds the prefix from scratch, so that run would drop hyprutils,
+    # aquamarine, hyprgraphics and wayland-protocols and fail on one of those.
+    given_configure_log <<'EOF'
+-- Checking for module 'hyprland-protocols>=0.8.0'
+--   Package dependency requirement 'hyprland-protocols >= 0.8.0' could not be satisfied.
+Package 'hyprland-protocols' has version '0.7.0', required version is '>= 0.8.0'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - hyprland-protocols>=0.8.0
+
+Call Stack (most recent call first):
+  CMakeLists.txt:545 (pkg_check_modules)
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    local arg
+    arg="$(printf '%s\n' "$output" | grep -o -- '--with-deps=[^ ]*')"
+    [ -n "$arg" ]
+    for dep in hyprutils wayland-protocols aquamarine hyprgraphics hyprland-protocols; do
+        [[ ",${arg#--with-deps=}," == *",$dep,"* ]]
+    done
+}
+
+@test "explain_configure_failure: the --with-deps advice names each dep once" {
+    # aquamarine is already in the default set, so the union must not repeat it.
+    given_configure_log <<'EOF'
+CMake Error at /usr/share/cmake-4.2/Modules/FindPkgConfig.cmake:1093 (message):
+  The following required packages were not found:
+
+   - aquamarine>=0.15.0
+
+Call Stack (most recent call first):
+EOF
+    explain
+    [ "$status" -eq 0 ]
+    local arg
+    arg="$(printf '%s\n' "$output" | grep -o -- '--with-deps=[^ ]*')"
+    [ "$(printf '%s' "${arg#--with-deps=}" | tr ',' '\n' | grep -c '^aquamarine$')" = "1" ]
 }
 
 @test "explain_configure_failure: reports both classes when both are unsatisfied" {
@@ -335,7 +394,7 @@ Call Stack (most recent call first):
 EOF
     explain
     [ "$status" -eq 0 ]
-    [[ "$output" == *"--with-deps=aquamarine"* ]]
+    [[ "$output" == *"--with-deps="*"aquamarine"* ]]
     [[ "$output" != *"udis86"* ]]
 }
 
@@ -383,6 +442,19 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"Full configure log: $BATS_TEST_TMPDIR/kept-configure.log"* ]]
     [ -s "$BATS_TEST_TMPDIR/kept-configure.log" ]
+}
+
+@test "compile failure: the build output is teed and a copy kept" {
+    # Static, like the trap tests above: the compile path lives after the
+    # DEFINE_ONLY seam, so there is no way to drive it from a harness. What is
+    # checkable is that the wiring is present — before this, a compile failure
+    # said "see output above" and cleanup_build then deleted the only log.
+    run grep -cE 'tee "\$build_log"$' "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+    run grep -cE 'cp -f "\$build_log" "\$BUILD_LOG_KEEP"' "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
 }
 
 @test "explain_configure_failure: the configure failure path calls it" {
