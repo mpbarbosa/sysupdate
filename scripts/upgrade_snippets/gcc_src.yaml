@@ -1,0 +1,174 @@
+# GCC from upstream source (private prefix) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-10-31
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Tracks the GNU Compiler Collection as *upstream* releases it, and installs it
+# into a private versioned prefix. This sits alongside the apt-based `gcc`
+# snippet (gcc.yaml); it does not replace it.
+#
+# WHY A SECOND SNIPPET RATHER THAN A SECOND VERSION SOURCE ON gcc.yaml
+#   The version source has to match the install channel. `gcc.yaml` installs
+#   through apt, so its "latest" must stay the apt candidate: if it reported an
+#   upstream release instead, it would permanently announce an update it has no
+#   way to apply - the defect once fixed in matchmaker.yaml. So `gcc` stays
+#   apt-only, and this snippet compares *its own prefix install* against
+#   upstream releases. The two answer different questions and can disagree by
+#   several releases without either being wrong: on a host where apt's default
+#   is 15.2.0 and the archive's gcc-16 is a prerelease snapshot, upstream has
+#   already released 15.3.0, 16.1.0 and 16.2.0.
+#
+# WHY A PRIVATE PREFIX, NEVER /usr
+#   `make install` into /usr is not an option, with or without sudo:
+#     - dpkg owns /usr/bin/gcc (a symlink the gcc-defaults metapackage places)
+#       and the shared runtime libraries /usr/lib/.../libgcc_s.so.1 and
+#       libstdc++.so.6. Writing over them puts files on disk that no package
+#       claims, so apt's accounting is wrong from then on and the next upgrade
+#       of libgcc-s1 or libstdc++6 silently reverts or half-reverts the install.
+#     - libstdc++.so.6 and libgcc_s.so.1 are linked by effectively every C++
+#       binary on the host. Replacing them out of band risks the system's C++
+#       runtime, which is not a risk an update script may take on a user's
+#       behalf.
+#   So the install goes to its own versioned prefix (prefix.root/gcc-<version>)
+#   and is configured with --program-suffix, so even if the prefix's bin/ is put
+#   on PATH its drivers are named gcc-upstream-<major> / g++-upstream-<major>
+#   and cannot shadow the distro's gcc, gcc-15 or g++-16.
+#
+# WHAT A BUILD COSTS
+#   A release is a 3-stage bootstrap: the compiler builds itself twice more and
+#   compares stage 2 against stage 3. On ordinary desktop hardware that is on
+#   the order of an hour or more of saturated CPU, and the build tree reaches
+#   roughly 10 GB. The build therefore (a) never starts in --check-only,
+#   (b) is confirmed explicitly with its cost stated, (c) is preceded by a free
+#   space check, and (d) happens in a temporary directory under TMPDIR, outside
+#   the install prefix, which is removed afterwards.
+#
+# RUNTIME CONSEQUENCE OF ACTUALLY USING IT
+#   A binary compiled with the new g++ may require the *newer*
+#   libstdc++.so.6 that lives in the prefix, and will not start against the
+#   distro's older one. Both ways of resolving that are deliberate user
+#   choices, so this snippet does neither: it only prints them. See
+#   messages.runtime_note. In particular, nothing here writes to
+#   /etc/ld.so.conf.d - changing the system-wide library search order affects
+#   every process on the host, not just the build that wanted it.
+#
+# Version History:
+#   0.1.0-alpha (2026-10-31) - Initial alpha version, upstream source build
+
+# Application identifiers
+application:
+  name: "gcc-src"
+  display_name: "GCC (upstream source)"
+  git_repo: "https://gcc.gnu.org/git/gcc.git"
+
+# Install prefix
+#   root      - versioned prefixes are created directly under this directory,
+#               as <root>/gcc-<version>. Override with
+#               SYSUPDATE_GCC_SRC_PREFIX_ROOT to keep the toolchain in
+#               "${XDG_DATA_HOME:-$HOME/.local/share}" instead of /opt and so
+#               avoid needing sudo at install time at all.
+#   program_suffix_prefix - "-upstream-" plus the release's major version is
+#               appended to every installed driver name (gcc-upstream-16,
+#               g++-upstream-16). It must stay distinct from the distro's own
+#               "-<major>" suffix (gcc-16 from apt), or the two namespaces
+#               collide the moment the prefix's bin/ reaches PATH.
+prefix:
+  root: "/opt"
+  program_suffix_prefix: "-upstream-"
+
+# Version discovery
+#   current - NOT /usr/bin/gcc. That one is apt's, and the `gcc` snippet
+#             already tracks it; reading it here would compare a distro package
+#             against an upstream release and report a permanent update. The
+#             current version is the prefix install's own driver, asked with
+#             `-dumpfullversion`, which prints exactly the three-part upstream
+#             release ("16.2.0") with no distro build string around it.
+#             With no prefix install present the status is `not_installed` and
+#             the snippet stops - it does not start an hour-plus first build
+#             unprompted.
+#   latest  - `git ls-remote --tags` on the upstream repository, restricted to
+#             the refs/tags/releases/gcc-* namespace, then reduced by
+#             upgrade_utils.sh's select_highest_semver_tag.
+#
+#             Why ls-remote and not version.source "github_tags" against the
+#             gcc-mirror/gcc mirror: the GitHub REST path is subject to the
+#             anonymous rate limit, which has already produced "unknown"
+#             version reports elsewhere in this repo, and it needs a token to
+#             be reliable. ls-remote needs neither, and reads the project's own
+#             canonical repository.
+#
+#             Why the namespace filter: the tag namespace also holds
+#             basepoints/gcc-16, prereleases/gcc-2.95.3-test1,
+#             vendors/..., libgcj-2.95.1 and libf2c-0.5.22. The dotless and
+#             suffixed ones select_highest_semver_tag already drops, but the
+#             library tags are bare semver and would be eligible on their own
+#             merits; releases/gcc-* is the only namespace that means "a GCC
+#             release".
+#
+#   Both sides are plain three-part dotted-numeric releases, so compare_versions
+#   reaches dpkg's comparator directly. Unlike gcc.yaml there is no epoch or
+#   Debian revision to strip here: neither side comes from apt.
+version:
+  source: "git_tags"
+  tag_namespace: "refs/tags/releases/gcc-"
+
+# Build requirements
+#   deps        - commands that must be on PATH before a build is attempted.
+#                 GMP, MPFR, MPC and ISL are NOT listed: contrib/download_prerequisites
+#                 fetches and unpacks them into the source tree, which is why
+#                 tar, bzip2 and a downloader are required instead.
+#   downloaders - contrib/download_prerequisites needs one of these (it prefers
+#                 wget and falls back to curl); either satisfies the check.
+#   free_mb     - measured free space, in MB, on the filesystem that will hold
+#                 the build tree and on the one that will hold the prefix.
+build:
+  deps: "git make gcc g++ tar bzip2 flex bison"
+  downloaders: "wget curl"
+  free_build_mb: 12000
+  free_prefix_mb: 3000
+  languages: "c,c++"
+
+# Messages
+messages:
+  checking_updates: "Checking GCC upstream source releases..."
+  install_help: |
+    No upstream GCC source install was found. This snippet updates an existing
+    private-prefix build; it does not perform the first one unprompted, because
+    a GCC release is an hour-plus 3-stage bootstrap and ~10 GB of build tree.
+
+    To create one, run the snippet's own build once you are ready to spend that:
+      SYSUPDATE_GCC_SRC_FIRST_BUILD=true ./scripts/system_update.sh --snippet gcc-src
+
+    The system compilers from apt are tracked separately by the `gcc` snippet;
+    nothing here is needed for ordinary builds.
+  failed_version: "Found an upstream GCC prefix but could not read a release from its driver - treating the install as unusable"
+  failed_latest: "Failed to list upstream GCC release tags (no git, or the repository was unreachable)"
+  missing_downloader: "contrib/download_prerequisites needs wget or curl; install one of them"
+  confirm_build: |
+    Building GCC {version} from source into {prefix}
+      - a full 3-stage bootstrap: expect an hour or more of saturated CPU
+      - roughly 10 GB of temporary build tree under {build_root}
+      - nothing outside {prefix} is written; the system compilers are untouched
+  insufficient_space: "Not enough free space on {path}: {available} MB available, {required} MB required"
+  installing: "Building and installing GCC {version} - this will take a while..."
+  update_success: "GCC built from upstream source and installed"
+  runtime_note: |
+    Using this toolchain has a runtime consequence worth knowing before you do:
+    a binary built with {prefix}/bin/g++{suffix} may need that prefix's newer
+    libstdc++.so.6 at run time and will not start against the distro's older
+    one. Two deliberate ways to deal with it, neither of which this snippet
+    does for you:
+      - link the newer runtime into the binary:
+          g++{suffix} -static-libstdc++ -static-libgcc ...
+      - or make the prefix's runtime findable, per-process:
+          LD_LIBRARY_PATH={prefix}/lib64 ./your-binary
+        A permanent /etc/ld.so.conf.d entry would do the same system-wide, for
+        every process on the host - which is why it is left to you.
+
+# Remediation text for blocking summary statuses
+remediation:
+  insufficient_space: "Free space under the build or prefix filesystem, or point SYSUPDATE_GCC_SRC_PREFIX_ROOT and TMPDIR at a larger one, then re-run --snippet gcc-src"
+  missing_build_deps: "Install the missing build dependencies named above, then re-run --snippet gcc-src"
