@@ -8,6 +8,14 @@
 # This script manages both the fwupd package itself and firmware updates
 # for devices on the system.
 #
+# The reported "latest" version comes from upgrade_utils.sh's shared
+# apt_resolve_latest_version: the apt candidate while the local index is fresh,
+# and the serving repository's own Packages index once it is stale - because
+# --check-only and --snippet never run `apt-get update`, so the candidate they
+# read can be days behind. The pocket a stale index has never seen is reached
+# too: the sibling indexes apt knows at the same priority in the same archive
+# family join the lookup. The answer only moves forward, and never past a hold.
+#
 # Dependencies:
 #   - fwupd (Linux Firmware Update Daemon)
 #   - apt (for package updates)

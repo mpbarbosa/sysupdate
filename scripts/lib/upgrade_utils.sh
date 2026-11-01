@@ -5,13 +5,26 @@
 # Provides reusable functions for version checking and application updates
 # to avoid code duplication across upgrade snippet modules.
 #
-# Version: 1.3.0
-# Date: 2026-10-12
+# Version: 1.4.0
+# Date: 2026-10-31
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # License: MIT
 #
 # Version History:
+#   1.4.0 (2026-10-31) - Read-only apt discovery for archive-served packages:
+#                        get_apt_latest_version now resolves past a stale local
+#                        index, so gcc / python3 / firefox / fwupd / chrome stop
+#                        reporting a superseded candidate as up to date
+#                      - New functions: apt_resolve_latest_version(),
+#                        apt_package_candidate_origins(), apt_package_origin_pool(),
+#                        apt_package_winning_priority(), apt_known_index_origins(),
+#                        apt_host_family(),
+#                        apt_package_index_is_stale(), apt_published_latest_version(),
+#                        apt_repo_version_table(), apt_repo_published_version(),
+#                        apt_index_to_version_table(), apt_index_cache_dir(),
+#                        fetch_debian_repo_index_stream(), apt_candidate_version(),
+#                        apt_version_gt(), apt_report_latest_resolution()
 #   1.3.0 (2026-10-12) - Read-only apt version discovery that does not depend
 #                        on the freshness of the local apt index
 #                      - New functions: select_highest_dpkg_version(),
@@ -357,6 +370,13 @@ get_npm_latest_version() {
 # Fetch latest version from apt repository
 # Usage: get_apt_latest_version "package-name"
 # Returns: version string (e.g., "141.0.7390.76-1")
+#
+# The version comes from apt_resolve_latest_version rather than straight from
+# the candidate, so a read-only scan with a stale local index reports what the
+# repository actually publishes instead of a long-superseded candidate. See
+# "TRUSTWORTHY APT 'LATEST' VERSION" below for what that does and does not do.
+# The trailing Debian revision is stripped here, as it always was, because the
+# current version every caller compares against is stripped the same way.
 get_apt_latest_version() {
     local package="$1"
     local verbose="${2:-false}"
@@ -371,7 +391,7 @@ get_apt_latest_version() {
     fi
     
     local version
-    version=$(apt-cache policy "$package" 2>/dev/null | grep "Candidate:" | awk '{print $2}' | sed 's/-[^-]*$//')
+    version=$(apt_resolve_latest_version "$package" | sed 's/-[^-]*$//')
     if [ -z "$version" ]; then
         print_error "Failed to get latest version from apt"
         return 1
@@ -846,6 +866,437 @@ fetch_debian_repo_latest_version() {
     printf '%s\n' "$index" \
         | awk '/^Version:[[:space:]]/ { print $2 }' \
         | select_highest_dpkg_version
+}
+
+#=============================================================================
+# TRUSTWORTHY APT "LATEST" VERSION FOR READ-ONLY DISCOVERY
+#=============================================================================
+#
+# `apt-cache policy` answers out of the local index, which is only as fresh as
+# the last `apt-get update`. `--check-only` and `--snippet <id>` deliberately
+# never run one, so in exactly the two modes the dashboard consumes the
+# candidate can name a long-superseded version and the snippet reports
+# `up_to_date`. apt_resolve_latest_version() closes that gap: while the index
+# is fresh it returns the candidate unchanged, and once the index is stale it
+# asks the repository that would serve the package.
+#
+# Why the repository's own Packages index, and not the alternatives:
+#
+#   * Launchpad (Ubuntu) / ftp-master madison (Debian) replies are tiny, but
+#     they answer a different question - what the distribution published, not
+#     what this machine's configured mirror serves at this machine's pin
+#     priorities. A lagging mirror or a pin would turn their answer into the
+#     promise of an upgrade apt would refuse, which is the same defect as
+#     reporting past a hold. Two distro-specific APIs would also have to be
+#     kept working, each with its own outage and rate-limit behaviour.
+#   * A scoped `apt-get -o Dir::State::lists=<tmpdir> update` needs no sudo
+#     with a private lists directory, but it downloads the same index bytes
+#     plus Release and signature material, and scoping it to one origin means
+#     synthesising a sources file; get that wrong and it quietly refetches
+#     every enabled source instead of one.
+#   * The Packages index is the authority apt itself would read, over the same
+#     URI from the machine's own sources, needs no sudo and no apt-get update.
+#
+# What keeps it cheap is not fetching fewer bytes per index but fetching fewer
+# indexes: the origins come from the package's own version table, so only the
+# suites that actually serve *this* package are consulted (one for `gcc`, not
+# `resolute` + `-updates` + `-security`), only those at apt's winning pin
+# priority, and each index is reduced to a "<package> <version>" table cached
+# for the run - so `gcc`, `python3` and `fwupd` share a single fetch.
+#
+# Set SYSUPDATE_APT_PUBLISHED_LOOKUP=false to switch the lookup off entirely
+# and go back to reading the candidate alone.
+
+# Run-scoped cache directory for fetched repository index tables.
+# Echoes the path, creating it on first use; returns 1 when it cannot.
+apt_index_cache_dir() {
+    local dir="${SYSUPDATE_APT_INDEX_CACHE_DIR:-${TMPDIR:-/tmp}/sysupdate-apt-index-${SYSUPDATE_RUN_ID:-$$}}"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    printf '%s\n' "$dir"
+}
+
+# The apt origins that could actually install a package, as
+# "<base-url>|<suite>|<component>" lines. Returns 1 when there are none.
+#
+# Only the origins at the winning pin priority are reported, because those are
+# the only ones apt would choose between. Firefox is the worked example: with
+# Mozilla's repository pinned to 1000 and Ubuntu's snap-transition package
+# sitting at -1, "the highest version any origin publishes" would pick
+# Ubuntu's `1:1snap1-0ubuntu9.1` - an epoch outranks everything - and promise
+# an upgrade apt has been configured never to make.
+#
+# The dpkg status pin (priority 100, no URI) is the installed copy rather than
+# a source and never matches. Flat repositories print no suite/component pair,
+# so they yield nothing here and the caller keeps the candidate.
+apt_package_candidate_origins() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    local origins
+    origins=$(apt-cache policy "$package" 2>/dev/null | awk '
+        $2 ~ /:\/\// && $NF == "Packages" && NF >= 5 {
+            priority = $1 + 0
+            # 0 and below are never installed, so they are not candidates.
+            if (priority < 1) next
+            split($3, parts, "/")
+            if (parts[1] == "" || parts[2] == "") next
+            key = $2 "|" parts[1] "|" parts[2]
+            if (!(key in seen) || priority > seen[key]) seen[key] = priority
+            if (priority > winning) winning = priority
+        }
+        END {
+            for (key in seen) if (seen[key] == winning) print key
+        }
+    ')
+
+    [ -n "$origins" ] || return 1
+    printf '%s\n' "$origins"
+}
+
+# The winning pin priority among the origins that serve a package.
+# Args: <package>; returns 1 when no origin does.
+apt_package_winning_priority() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    local winning
+    winning=$(apt-cache policy "$package" 2>/dev/null | awk '
+        $2 ~ /:\/\// && $NF == "Packages" && NF >= 5 {
+            priority = $1 + 0
+            if (priority < 1) next
+            if (priority > winning) winning = priority
+        }
+        END { if (winning > 0) print winning }
+    ')
+
+    [ -n "$winning" ] || return 1
+    printf '%s\n' "$winning"
+}
+
+# Every index apt knows about, as "<priority>|<base-url>|<suite>|<component>".
+#
+# Read from `apt-cache policy` with no package, which lists the configured
+# priority of each index. Those priorities come from the Release files and the
+# preferences, not from the package lists, so they stay true while the versions
+# in the index go stale.
+apt_known_index_origins() {
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    local origins
+    origins=$(apt-cache policy 2>/dev/null | awk '
+        $2 ~ /:\/\// && $NF == "Packages" && NF >= 5 {
+            priority = $1 + 0
+            if (priority < 1) next
+            split($3, parts, "/")
+            if (parts[1] == "" || parts[2] == "") next
+            print priority "|" $2 "|" parts[1] "|" parts[2]
+        }
+    ' | sort -u)
+
+    [ -n "$origins" ] || return 1
+    printf '%s\n' "$origins"
+}
+
+# The last two labels of a host - "archive.ubuntu.com" and
+# "security.ubuntu.com" both reduce to "ubuntu.com". Accepts a base URL.
+apt_host_family() {
+    local host="${1#*://}"
+    host="${host%%/*}"
+    host="${host%%:*}"
+    printf '%s\n' "$host" | awk -F. '{ if (NF >= 2) print $(NF - 1) "." $NF; else print $0 }'
+}
+
+# The origins a read-only scan should ask about a package, as
+# "<base-url>|<suite>|<component>" lines. Returns 1 when there are none.
+#
+# The package's own version table names only the pockets that already held a
+# version when the local index was last fetched. For an archive package that is
+# usually the frozen release pocket alone, while its updates land in
+# <suite>-updates and <suite>-security - exactly the pockets a months-old index
+# cannot point at. So the pool is the package's own winning-priority origins
+# plus every index apt knows at that same priority in the same archive family:
+# same component, same release before the pocket suffix, and a host sharing its
+# last two labels, which is what makes security.ubuntu.com a sibling of
+# archive.ubuntu.com.
+#
+# apt itself would consider *every* index at the winning priority. The family
+# restriction is a cost bound rather than a correctness rule: it keeps a run
+# from fetching the index of every unrelated third-party repository that merely
+# shares priority 500. A package served only by an index the local lists have
+# never seen at all stays out of reach.
+apt_package_origin_pool() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+
+    local own
+    own=$(apt_package_candidate_origins "$package") || return 1
+
+    local priority
+    priority=$(apt_package_winning_priority "$package") || {
+        printf '%s\n' "$own"
+        return 0
+    }
+
+    local -a families=() releases=() components=()
+    local base suite component
+    while IFS='|' read -r base suite component; do
+        [ -n "$base" ] || continue
+        families+=("$(apt_host_family "$base")")
+        releases+=("${suite%%-*}")
+        components+=("$component")
+    done <<< "$own"
+
+    local pool="$own"
+    local known_priority family release index
+    while IFS='|' read -r known_priority base suite component; do
+        [ "$known_priority" = "$priority" ] || continue
+        family=$(apt_host_family "$base")
+        release="${suite%%-*}"
+        for ((index = 0; index < ${#families[@]}; index++)); do
+            [ "$family" = "${families[$index]}" ] || continue
+            [ "$release" = "${releases[$index]}" ] || continue
+            [ "$component" = "${components[$index]}" ] || continue
+            pool+=$'\n'"$base|$suite|$component"
+            break
+        done
+    done < <(apt_known_index_origins)
+
+    printf '%s\n' "$pool" | sort -u
+}
+
+# True when the local index of any origin that could install the package is
+# missing or older than max-age - i.e. when the candidate is not evidence.
+# Args: <package> [max-age-seconds]
+apt_package_index_is_stale() {
+    local package="$1" max_age="$2"
+    local base suite component host
+
+    while IFS='|' read -r base suite component; do
+        [ -n "$base" ] || continue
+        host="${base#*://}"
+        host="${host%%/*}"
+        [ -n "$host" ] || continue
+        if apt_index_is_stale "$host" "$max_age"; then
+            return 0
+        fi
+    done < <(apt_package_origin_pool "$package")
+
+    return 1
+}
+
+# Reduce a Debian Packages index on stdin to "<package> <version>" lines.
+#
+# The main archive's index is tens of megabytes uncompressed, so it is never
+# held in a variable or written to disk whole: it streams through here and only
+# the table is kept.
+apt_index_to_version_table() {
+    awk '
+        /^Package:[[:space:]]/ { package_name = $2; next }
+        /^Version:[[:space:]]/ { if (package_name != "") print package_name, $2; next }
+        /^$/ { package_name = "" }
+    '
+}
+
+# Stream one origin's Packages index for an architecture to stdout.
+# Args: <base-url> <suite> <component> <arch>; returns 1 when unreadable.
+#
+# Separate from fetch_debian_repo_index so the body never has to fit in a
+# variable, and so the suites can stub the network at one seam.
+fetch_debian_repo_index_stream() {
+    local base="$1" suite="$2" component="$3" arch="$4"
+    [ -n "$base" ] && [ -n "$suite" ] && [ -n "$component" ] && [ -n "$arch" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+
+    local timeout="${SYSUPDATE_CURL_TIMEOUT:-20}"
+    local url="${base%/}/dists/${suite}/${component}/binary-${arch}/Packages"
+    local payload
+    payload=$(mktemp 2>/dev/null) || return 1
+
+    # The archive publishes the compressed index; some third-party repositories
+    # publish only the plain one.
+    if command -v gzip >/dev/null 2>&1 \
+        && curl -fsSL --max-time "$timeout" -o "$payload" "${url}.gz" 2>/dev/null \
+        && [ -s "$payload" ]; then
+        gzip -cd < "$payload" 2>/dev/null
+        rm -f "$payload"
+        return 0
+    fi
+
+    if curl -fsSL --max-time "$timeout" -o "$payload" "$url" 2>/dev/null \
+        && [ -s "$payload" ]; then
+        cat "$payload"
+        rm -f "$payload"
+        return 0
+    fi
+
+    rm -f "$payload"
+    return 1
+}
+
+# Path to the cached "<package> <version>" table for one origin, fetching it on
+# first use. Args: <base-url> <suite> <component> <arch>; returns 1 on failure.
+#
+# An unreachable origin is remembered as a miss for the rest of the run, so one
+# network timeout is paid once rather than by every snippet behind it.
+apt_repo_version_table() {
+    local base="$1" suite="$2" component="$3" arch="$4"
+    local dir key table
+    dir=$(apt_index_cache_dir) || return 1
+
+    key=$(printf '%s|%s|%s|%s' "$base" "$suite" "$component" "$arch" \
+        | md5sum 2>/dev/null | awk '{ print $1 }')
+    [ -n "$key" ] || key="${base//[^A-Za-z0-9]/_}_${suite}_${component}_${arch}"
+    table="$dir/$key.table"
+
+    [ -f "$table.miss" ] && return 1
+    if [ -s "$table" ]; then
+        printf '%s\n' "$table"
+        return 0
+    fi
+
+    fetch_debian_repo_index_stream "$base" "$suite" "$component" "$arch" \
+        | apt_index_to_version_table > "$table.part" 2>/dev/null
+
+    if [ -s "$table.part" ] && mv -f "$table.part" "$table" 2>/dev/null; then
+        printf '%s\n' "$table"
+        return 0
+    fi
+
+    rm -f "$table.part"
+    : > "$table.miss" 2>/dev/null
+    return 1
+}
+
+# The highest version one origin publishes for a package.
+# Args: <package> <base-url> <suite> <component> <arch>
+apt_repo_published_version() {
+    local package="$1" base="$2" suite="$3" component="$4" arch="$5"
+    [ -n "$package" ] || return 1
+
+    local table
+    table=$(apt_repo_version_table "$base" "$suite" "$component" "$arch") || return 1
+
+    awk -v want="$package" '$1 == want { print $2 }' "$table" \
+        | select_highest_dpkg_version
+}
+
+# The highest version the package's origin pool publishes, read from those
+# origins' own Packages indexes. Args: <package>; returns 1 when none answers.
+apt_published_latest_version() {
+    local package="$1"
+    [ -n "$package" ] || return 1
+
+    local arch base suite component
+    arch=$(dpkg --print-architecture 2>/dev/null)
+    [ -n "$arch" ] || arch="amd64"
+
+    {
+        while IFS='|' read -r base suite component; do
+            [ -n "$base" ] && [ -n "$suite" ] && [ -n "$component" ] || continue
+            apt_repo_published_version "$package" "$base" "$suite" "$component" "$arch"
+        done < <(apt_package_origin_pool "$package")
+    } | select_highest_dpkg_version
+}
+
+# True when version <a> is strictly newer than version <b>, by dpkg's ordering.
+# Usage: apt_version_gt "4:10.1.0" "4:9.5.0"
+apt_version_gt() {
+    [ -n "$1" ] || return 1
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg --compare-versions "$1" gt "$2"
+        return
+    fi
+
+    [ "$1" != "$2" ] || return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+# The apt candidate for a package, verbatim ("(none)" reported as absent).
+apt_candidate_version() {
+    local candidate
+    candidate=$(apt-cache policy "$1" 2>/dev/null \
+        | awk '/^[[:space:]]*Candidate:/ { print $2; exit }')
+    [ -n "$candidate" ] && [ "$candidate" != "(none)" ] || return 1
+    printf '%s\n' "$candidate"
+}
+
+# Record where a resolved apt "latest" version came from, as a log.entry event
+# on the JSON stream. Silent for the plain candidate - that is the default - and
+# silent when --json-events is off. Args: <package>
+apt_report_latest_resolution() {
+    [ "${APT_LATEST_VERSION_SOURCE:-apt candidate}" = "apt candidate" ] && return 0
+    emit_event "log.entry" "action" "apt_latest_resolution" "target" "$1" \
+        "status" "resolved" "category" "version_check" \
+        "details" "$APT_LATEST_VERSION_SOURCE"
+}
+
+# The version a read-only scan should report as "latest" for an apt package.
+# Args: <package> [max-age-seconds, default SYSUPDATE_APT_INDEX_MAX_AGE or 3600]
+# Echoes a full dpkg version (epoch and Debian revision intact) and returns 0,
+# or returns 1 when no authority can name one.
+#
+# Sets APT_LATEST_VERSION_SOURCE to the provenance of the answer, so a caller
+# that does not need a subshell can say which authority produced the version;
+# the same provenance is emitted as a log.entry event whenever it is not the
+# plain candidate. Nothing is printed to stdout but the version itself, because
+# every caller captures this in a command substitution.
+#
+# The answer only ever moves forward past the candidate, and never past a hold:
+# a held package cannot be upgraded at all, so reporting the repository's newer
+# version for it would promise an upgrade apt would refuse.
+apt_resolve_latest_version() {
+    local package="$1"
+    local max_age="${2:-${SYSUPDATE_APT_INDEX_MAX_AGE:-3600}}"
+    [ -n "$package" ] || return 1
+    command -v apt-cache >/dev/null 2>&1 || return 1
+
+    local candidate
+    candidate=$(apt_candidate_version "$package") || candidate=""
+    APT_LATEST_VERSION_SOURCE="apt candidate"
+
+    # The candidate is the better answer while the index is fresh: it accounts
+    # for pinning and preferences, so it is the version an upgrade would
+    # actually install.
+    if [ "${SYSUPDATE_APT_PUBLISHED_LOOKUP:-true}" != "true" ] \
+        || ! apt_package_is_repo_served "$package" \
+        || ! apt_package_index_is_stale "$package" "$max_age"; then
+        [ -n "$candidate" ] || return 1
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    if apt_package_is_held "$package"; then
+        APT_LATEST_VERSION_SOURCE="apt candidate (held by apt)"
+        apt_report_latest_resolution "$package"
+        [ -n "$candidate" ] || return 1
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    local published
+    published=$(apt_published_latest_version "$package") || published=""
+
+    if [ -z "$published" ]; then
+        [ -n "$candidate" ] || return 1
+        APT_LATEST_VERSION_SOURCE="apt candidate (stale index, repository unreachable)"
+        apt_report_latest_resolution "$package"
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    # Forward only. A candidate at or above what the winning origins publish
+    # means the local index already holds the better answer - another source
+    # serves the package too, and apt would install that one.
+    if [ -n "$candidate" ] && ! apt_version_gt "$published" "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    APT_LATEST_VERSION_SOURCE="repository index (local apt index is stale)"
+    apt_report_latest_resolution "$package"
+    printf '%s\n' "$published"
 }
 
 #=============================================================================

@@ -7,6 +7,18 @@
 # Handles version checking, installation, and updates for Firefox.
 # Supports both Snap and DEB versions, with preference for Mozilla's APT repository.
 #
+# The reported "latest" version comes from upgrade_utils.sh's shared
+# apt_resolve_latest_version: the apt candidate while the local index is fresh,
+# and the serving repository's own Packages index once it is stale - because
+# --check-only and --snippet never run `apt-get update`, so the candidate they
+# read can be days behind. The pocket a stale index has never seen is reached
+# too: the sibling indexes apt knows at the same priority in the same archive
+# family join the lookup. The answer only moves forward, and never past a hold.
+#
+# Only the origins at apt's winning pin priority are consulted, which here means
+# Mozilla's repository (pinned 1000) and not Ubuntu's snap-transition `firefox`
+# (pinned -1, and carrying an epoch that would outrank every real version).
+#
 
 # Load upgrade utilities library
 FIREFOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

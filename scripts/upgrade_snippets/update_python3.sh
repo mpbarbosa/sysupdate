@@ -7,6 +7,14 @@
 # Updates the system CPython interpreter through apt, the channel it is
 # installed from on Debian/Ubuntu. See python3.yaml for the version-comparison
 # rationale (apt package version on both sides, not `python3 --version`).
+#
+# The reported "latest" version comes from upgrade_utils.sh's shared
+# apt_resolve_latest_version: the apt candidate while the local index is fresh,
+# and the serving repository's own Packages index once it is stale - because
+# --check-only and --snippet never run `apt-get update`, so the candidate they
+# read can be days behind. The pocket a stale index has never seen is reached
+# too: the sibling indexes apt knows at the same priority in the same archive
+# family join the lookup. The answer only moves forward, and never past a hold.
 # Reference: https://www.python.org/
 #
 # Version: 0.1.0-alpha

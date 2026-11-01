@@ -62,9 +62,24 @@ messages:
 #   digit of a two-digit major (15.2.0 -> 5.2.0).
 #
 #   source/package_name record that this is an apt-sourced check; the latest
-#   version is resolved by the snippet (gcc_apt_version) rather than by
+#   version is resolved by the snippet (gcc_latest_apt_version) rather than by
 #   config_driven_version_check, because get_apt_latest_version keeps the
 #   epoch and only the current side would have it stripped.
+#
+#   The "latest" version is resolved through upgrade_utils.sh's shared
+#   apt_resolve_latest_version, not read straight off the apt candidate.
+#   `--check-only` and `--snippet <id>` deliberately never run
+#   `apt-get update`, so the locally cached index they read can be days old
+#   and name a long-superseded version as the latest. While the index is
+#   fresh the candidate still wins - it accounts for pinning and apt
+#   preferences, so it is the version an upgrade would really install. Once
+#   it is stale the resolver reads the Packages index of the repository that
+#   serves this package, over the same URI as the machine's own apt source
+#   and at apt's winning pin priority — including the sibling pockets apt
+#   knows at that priority in the same archive family, which is where an
+#   archive package's `<suite>-updates` and `<suite>-security` builds live.
+#   It only ever moves the answer forward, and it leaves a held package on
+#   its candidate, so the snippet never reports an upgrade apt would refuse.
 version:
   command: "apt-cache policy gcc 2>/dev/null | awk '$1 == \"Installed:\" { print $2; exit }' | sed -E 's/^[0-9]+://; s/-[^-]*$//'"
   regex: '^([0-9]+(\.[0-9]+)+)'
