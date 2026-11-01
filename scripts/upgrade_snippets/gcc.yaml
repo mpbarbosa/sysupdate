@@ -1,0 +1,82 @@
+# GCC (GNU Compiler Collection — gcc / g++) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-10-31
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Updates the system C and C++ compilers through apt — the channel they are
+# installed from on Debian/Ubuntu. The tracked package is the `gcc`
+# metapackage (source: gcc-defaults), which is what decides where
+# /usr/bin/gcc points (a plain symlink to gcc-N, not an update-alternatives
+# entry). `g++` ships from the same source at the same version, so the two
+# always move together — hence one snippet for both, with an update command
+# that upgrades both. The versioned compilers themselves (gcc-15, g++-16, …)
+# stay installed side by side and are pulled in as dependencies when the
+# default moves.
+#
+# NOTE: like python3, `gcc` is an ordinary apt package that also moves during a
+# normal `apt upgrade`, so this overlaps the APT snippet; it exists to surface
+# the toolchain as its own dashboard entry and to allow a targeted upgrade.
+#
+# Version History:
+#   0.1.0-alpha (2026-10-31) - Initial alpha version, apt-based
+#
+# Reference: https://gcc.gnu.org/
+
+# Application identifiers
+application:
+  name: "gcc"
+  command: "gcc"
+  display_name: "GCC (gcc/g++)"
+
+# Messages
+messages:
+  checking_updates: "Checking GCC (gcc/g++) updates..."
+  install_help: |
+    The C and C++ compilers come from the base toolchain packages:
+      sudo apt install build-essential   # Debian/Ubuntu (gcc, g++, make)
+      sudo pacman -S base-devel          # Arch Linux
+  failed_version: "Failed to get current GCC version from apt (is gcc installed from a repository?)"
+  missing_cxx: "g++ is not installed - C++ builds will fail; install it with: sudo apt install g++"
+  unsupported_platform: "GCC is tracked through apt; this system has no apt - skipping"
+  update_success: "GCC updated successfully"
+  installing: "Updating GCC (gcc, g++) via apt..."
+
+# Version extraction
+#   Both sides of the comparison are apt's own view of the `gcc` metapackage,
+#   reduced to the upstream release: the epoch and the Debian revision are
+#   stripped, so "4:15.2.0-5ubuntu1" becomes "15.2.0".
+#
+#   Do NOT use `gcc --version` — it reports the build of the active gcc-N
+#   ("Ubuntu 15.2.0-16ubuntu1" -> 15.2.0), which is not the `gcc` metapackage
+#   version and cannot be compared with it.
+#
+#   Why strip the epoch: `compare_versions` only reaches dpkg's comparator for
+#   a plain dotted-numeric version and compares dotted components as text
+#   otherwise, which would sort "4:9" above "4:10".
+#
+#   The regex is anchored at ^ because `extract_version` wraps the pattern as
+#   `s/.*<pattern>.*/\1/p`, and an unanchored leading `.*` steals the first
+#   digit of a two-digit major (15.2.0 -> 5.2.0).
+#
+#   source/package_name record that this is an apt-sourced check; the latest
+#   version is resolved by the snippet (gcc_apt_version) rather than by
+#   config_driven_version_check, because get_apt_latest_version keeps the
+#   epoch and only the current side would have it stripped.
+version:
+  command: "apt-cache policy gcc 2>/dev/null | awk '$1 == \"Installed:\" { print $2; exit }' | sed -E 's/^[0-9]+://; s/-[^-]*$//'"
+  regex: '^([0-9]+(\.[0-9]+)+)'
+  source: "apt"
+  package_name: "gcc"
+
+# Update configuration
+#   --only-upgrade keeps the snippet an *updater*: it never installs g++ on a
+#   system that does not have it (apt skips a package that is not installed),
+#   which is reported separately via messages.missing_cxx.
+update:
+  method: "apt"
+  update_command: "sudo apt-get update && sudo apt-get install --only-upgrade -y gcc g++"
+  output_lines: 20
+  requires_sudo: true
