@@ -577,6 +577,43 @@ commit_prefix() {
     echo "    previous prefix kept at $DEST.previous (delete it once you are happy)"
 }
 
+#-------------------------- generic links: are they actually ours? --------------------------
+# update-alternatives refuses to replace a path that is a real file it does not
+# own, and says so in ONE line among hundreds of lines of output:
+#
+#     update-alternatives: warning: not replacing /usr/local/bin/hyprpm with a link
+#
+# Afterwards the group looks correct — `--display` lists the slave, and
+# /etc/alternatives/hyprpm points at the new build — while PATH still finds the
+# old binary. Measured on this machine on 2026-10-31: Hyprland and hyprctl were
+# proper links to the freshly built 0.57.0 while /usr/local/bin/hyprpm was still
+# a 2025-12-14 file left by an earlier /usr/local source install, so the
+# compositor was ten months newer than its own plugin manager. Nothing in the
+# script's output said so after the fact.
+#
+# So check the links instead of trusting the registration, and print the one
+# command that fixes each one.
+report_unmanaged_links() {
+    local p target rc=0
+    local self="${BASH_SOURCE[0]}"
+    for p in "$@"; do
+        [ -e "$p" ] || [ -L "$p" ] || continue
+        if [ -L "$p" ]; then
+            target="$(readlink "$p")"
+            case "$target" in
+                /etc/alternatives/*) continue ;;
+            esac
+            echo "warning: $p is a symlink to $target, not to /etc/alternatives/" >&2
+        else
+            echo "warning: $p is a regular file, so update-alternatives could not take it over" >&2
+        fi
+        rc=1
+        echo "         PATH will find it instead of the active alternative. To fix:" >&2
+        echo "           sudo mv $p $p.stale && sudo bash $self --skip-build" >&2
+    done
+    return "$rc"
+}
+
 # Test seam, mirroring web/run_app.sh. `SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1
 # source setup-hyprland-alternatives.sh` stops here with only the helpers above
 # defined, so the prefix staging/rollback can be exercised directly
@@ -772,3 +809,8 @@ Done.
   • Tear the whole group down (keeps both installs):
         sudo bash setup-hyprland-alternatives.sh --remove
 DONE_MSG
+
+# Last, so an unmanaged path is the final thing on screen instead of a warning
+# buried in the registration output. Not fatal: the build and the group are fine,
+# it is PATH that disagrees with them.
+report_unmanaged_links "$LINK" /usr/local/bin/hyprctl /usr/local/bin/hyprpm || true
