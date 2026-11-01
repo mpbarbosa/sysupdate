@@ -10,6 +10,14 @@
 # and always carry the same version. See gcc.yaml for the version-comparison
 # rationale (apt package version on both sides, epoch and Debian revision
 # stripped - never `gcc --version`).
+#
+# The reported "latest" version comes from upgrade_utils.sh's shared
+# apt_resolve_latest_version: the apt candidate while the local index is fresh,
+# and the serving repository's own Packages index once it is stale - because
+# --check-only and --snippet never run `apt-get update`, so the candidate they
+# read can be days behind. The pocket a stale index has never seen is reached
+# too: the sibling indexes apt knows at the same priority in the same archive
+# family join the lookup. The answer only moves forward, and never past a hold.
 # Reference: https://gcc.gnu.org/
 #
 # Version: 0.1.0-alpha
@@ -19,6 +27,10 @@
 # Status: Non-production (Alpha)
 #
 # Version History:
+#   0.2.0-alpha (2026-10-31) - Resolve the latest version through the shared
+#                              apt_resolve_latest_version, so a stale local apt
+#                              index no longer reports a superseded release as
+#                              up to date in --check-only / --snippet
 #   0.1.0-alpha (2026-10-31) - Initial alpha version, apt-based
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,8 +40,8 @@ source "$LIB_DIR/upgrade_utils.sh"
 # shellcheck disable=SC2034
 CONFIG_FILE="$SCRIPT_DIR/gcc.yaml"
 
-# The upstream release apt records for a package, with the epoch and the Debian
-# revision stripped: "4:15.2.0-5ubuntu1" -> "15.2.0".
+# Reduce a dpkg version to the upstream release by dropping apt's bookkeeping:
+# the epoch and the Debian revision. "4:15.2.0-5ubuntu1" -> "15.2.0".
 #
 # Both are apt bookkeeping rather than upstream version, and both have to go for
 # the comparison to be sound: compare_versions only reaches dpkg's comparator
@@ -39,19 +51,38 @@ CONFIG_FILE="$SCRIPT_DIR/gcc.yaml"
 # The value comes from an external command, so it is returned only when it
 # reduces to a dotted-numeric version - "(none)", for a package dpkg knows but
 # has not installed, is rejected rather than compared.
+# Usage: gcc_strip_apt_bookkeeping "4:15.2.0-5ubuntu1"
+gcc_strip_apt_bookkeeping() {
+    local version
+    version=$(printf '%s\n' "$1" | sed -E 's/^[0-9]+://; s/-[^-]*$//')
+
+    [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+
+    printf '%s\n' "$version"
+}
+
+# The upstream release apt records for a package, reduced as above.
 # Usage: gcc_apt_version <package> <Installed|Candidate>
 gcc_apt_version() {
     local package="$1"
     local field="$2"
 
-    local version
-    version=$(apt-cache policy "$package" 2>/dev/null \
-        | awk -v want="${field}:" '$1 == want { print $2; exit }' \
-        | sed -E 's/^[0-9]+://; s/-[^-]*$//')
+    gcc_strip_apt_bookkeeping "$(apt-cache policy "$package" 2>/dev/null \
+        | awk -v want="${field}:" '$1 == want { print $2; exit }')"
+}
 
-    [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
-
-    printf '%s\n' "$version"
+# The latest upstream release apt could install, reduced as above.
+#
+# Resolved through apt_resolve_latest_version rather than read off the
+# candidate: --check-only and --snippet never run `apt-get update`, so once the
+# local index is stale the candidate can name a long-superseded release. The
+# shared resolver falls back to the index of the repository that serves the
+# package, only ever moves the answer forward, and leaves a held package alone.
+# Usage: gcc_latest_apt_version <package>
+gcc_latest_apt_version() {
+    local resolved
+    resolved=$(apt_resolve_latest_version "$1") || return 1
+    gcc_strip_apt_bookkeeping "$resolved"
 }
 
 # True when apt is available to answer for the toolchain at all. On a non-apt
@@ -158,7 +189,7 @@ update_gcc() {
     # Resolved here rather than through config_driven_version_check: that path's
     # get_apt_latest_version keeps the epoch, so only the current side would
     # have it stripped and every comparison would be against a different format.
-    LATEST_VERSION=$(gcc_apt_version "$(get_config "version.package_name")" "Candidate")
+    LATEST_VERSION=$(gcc_latest_apt_version "$(get_config "version.package_name")")
 
     compare_and_report_versions "$CURRENT_VERSION" "$LATEST_VERSION" "$APP_DISPLAY_NAME"
     VERSION_STATUS=$?
