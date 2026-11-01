@@ -61,6 +61,30 @@ prompts:
     default: "y"
 
 # Version extraction
+#   The deb install method compares against apt's view of the `firefox`
+#   package.
+#
+#   The "latest" version is resolved through upgrade_utils.sh's shared
+#   apt_resolve_latest_version, not read straight off the apt candidate.
+#   `--check-only` and `--snippet <id>` deliberately never run
+#   `apt-get update`, so the locally cached index they read can be days old
+#   and name a long-superseded version as the latest. While the index is
+#   fresh the candidate still wins - it accounts for pinning and apt
+#   preferences, so it is the version an upgrade would really install. Once
+#   it is stale the resolver reads the Packages index of the repository that
+#   serves this package, over the same URI as the machine's own apt source
+#   and at apt's winning pin priority — including the sibling pockets apt
+#   knows at that priority in the same archive family, which is where an
+#   archive package's `<suite>-updates` and `<suite>-security` builds live.
+#   It only ever moves the answer forward, and it leaves a held package on
+#   its candidate, so the snippet never reports an upgrade apt would refuse.
+#
+#   Firefox is the worked example for the pin-priority rule: Mozilla's
+#   repository is pinned to 1000 here while Ubuntu's snap-transition
+#   `firefox` sits at -1, so only Mozilla's index is consulted. Taking the
+#   highest version any origin publishes would pick Ubuntu's
+#   `1:1snap1-0ubuntu9.1` — an epoch outranks everything — and promise an
+#   upgrade apt has been configured never to make.
 version:
   command: "firefox --version"
   regex: 'Mozilla Firefox ([0-9]+\.[0-9]+(?:\.[0-9]+)?)'

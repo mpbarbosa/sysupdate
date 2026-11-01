@@ -2041,3 +2041,559 @@ STUB
         "https://downloads.claude.ai/claude-desktop/apt/stable/" stable main amd64
     [ "$output" = "https://downloads.claude.ai/claude-desktop/apt/stable/dists/stable/main/binary-amd64/Packages" ]
 }
+
+# ---------------------------------------------------------------------------
+# apt_resolve_latest_version and its parts
+#
+# The defect these cover: --check-only and --snippet deliberately never run
+# `apt-get update`, so in exactly the two modes the dashboard consumes, the apt
+# candidate can name a long-superseded version and the snippet reports
+# `up_to_date`. The resolver consults the repository's own Packages index once
+# the local index is stale - and must not move the answer backward, past a
+# hold, or over the network when the local index is still fresh.
+#
+# No test here touches the network: fetch_debian_repo_index_stream is the one
+# seam, and every case stubs it.
+# ---------------------------------------------------------------------------
+
+# A fake /var/lib/apt/lists holding one archive index, aged by `touch -d`.
+stub_archive_lists() {
+    local age_seconds="${1:-0}"
+    export APT_LISTS_DIR="$BATS_TEST_TMPDIR/archive-lists"
+    mkdir -p "$APT_LISTS_DIR"
+    local index="$APT_LISTS_DIR/archive.ubuntu.com_ubuntu_dists_resolute_main_binary-amd64_Packages"
+    : > "$index"
+    touch -d "@$(( $(date +%s) - age_seconds ))" "$index"
+}
+
+# A private, empty index cache so one test never reads another's fetch.
+isolate_apt_index_cache() {
+    export SYSUPDATE_APT_INDEX_CACHE_DIR="$BATS_TEST_TMPDIR/apt-index-cache"
+    rm -rf "$SYSUPDATE_APT_INDEX_CACHE_DIR"
+}
+
+# The one network seam, stubbed. Each call appends to a marker file, so a test
+# can assert the index was fetched once, or not at all.
+stub_repo_index_stream() {
+    export STUB_REPO_INDEX="$1"
+    export STREAM_MARKER="$BATS_TEST_TMPDIR/stream-calls"
+    rm -f "$STREAM_MARKER"
+    fetch_debian_repo_index_stream() {
+        echo "call" >> "$STREAM_MARKER"
+        printf '%s\n' "$STUB_REPO_INDEX"
+    }
+}
+
+# An origin that cannot be reached at all.
+stub_repo_index_unreachable() {
+    export STREAM_MARKER="$BATS_TEST_TMPDIR/stream-calls"
+    rm -f "$STREAM_MARKER"
+    fetch_debian_repo_index_stream() {
+        echo "call" >> "$STREAM_MARKER"
+        return 1
+    }
+}
+
+stub_apt_mark_holds() {
+    export STUB_APT_HOLDS="$1"
+    apt-mark() { printf '%s\n' "$STUB_APT_HOLDS"; }
+    export -f apt-mark
+}
+
+stream_call_count() {
+    [ -f "$STREAM_MARKER" ] || { echo 0; return 0; }
+    wc -l < "$STREAM_MARKER" | tr -d ' '
+}
+
+# gcc as this machine actually reports it: one origin, priority 500.
+GCC_POLICY='gcc:
+  Installed: 4:15.2.0-5ubuntu1
+  Candidate: 4:15.2.0-5ubuntu1
+  Version table:
+ *** 4:15.2.0-5ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages
+        100 /var/lib/dpkg/status'
+
+# A Packages index publishing a gcc newer than that candidate.
+GCC_PUBLISHED_INDEX='Package: g++
+Version: 4:16.1.0-1ubuntu1
+Architecture: amd64
+
+Package: gcc
+Version: 4:16.1.0-1ubuntu1
+Architecture: amd64
+Filename: pool/main/g/gcc-defaults/gcc_16.1.0-1ubuntu1_amd64.deb'
+
+# ---- apt_package_candidate_origins ----------------------------------------
+
+@test "apt_package_candidate_origins: reports the origin that serves the package" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    run apt_package_candidate_origins "gcc"
+    [ "$status" -eq 0 ]
+    [ "$output" = "http://archive.ubuntu.com/ubuntu|resolute|main" ]
+}
+
+# Firefox is why the winning pin priority has to be honoured. Mozilla's
+# repository is pinned to 1000 and Ubuntu's snap-transition package sits at -1;
+# "the highest version any origin publishes" would pick Ubuntu's
+# `1:1snap1-0ubuntu9.1` - an epoch outranks everything - and promise an upgrade
+# apt has been configured never to make.
+@test "apt_package_candidate_origins: keeps only the winning pin priority" {
+    stub_apt_cache_policy "firefox:
+  Installed: 159.0~build1
+  Candidate: 159.0~build1
+  Version table:
+     1:1snap1-0ubuntu9.1 -1
+        500 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 Packages
+ *** 159.0~build1 1000
+       1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    run apt_package_candidate_origins "firefox"
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://packages.mozilla.org/apt|mozilla|main" ]
+}
+
+@test "apt_package_candidate_origins: reports both pockets at the same priority" {
+    stub_apt_cache_policy "fwupd:
+  Installed: 2.0.17-1
+  Candidate: 2.0.17-1
+  Version table:
+ *** 2.0.17-1 500
+        500 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 Packages
+        500 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    run apt_package_candidate_origins "fwupd"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"|resolute|main"* ]]
+    [[ "$output" == *"|resolute-updates|main"* ]]
+}
+
+# A hand-downloaded .deb has only the dpkg status pin: no repository to ask.
+@test "apt_package_candidate_origins: none when only the dpkg status pin exists" {
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 100
+        100 /var/lib/dpkg/status"
+    run apt_package_candidate_origins "claude-desktop"
+    [ "$status" -ne 0 ]
+    [ "$output" = "" ]
+}
+
+# A flat repository publishes no dists/<suite>/<component> tree, so there is no
+# Packages index to derive; the caller keeps the candidate.
+@test "apt_package_candidate_origins: none for a flat repository" {
+    stub_apt_cache_policy "local-app:
+  Installed: (none)
+  Candidate: 1.2.3
+  Version table:
+     1.2.3 500
+        500 file:/srv/local-repo ./ Packages"
+    run apt_package_candidate_origins "local-app"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_package_candidate_origins: none when given no package name" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    run apt_package_candidate_origins ""
+    [ "$status" -ne 0 ]
+}
+
+# ---- apt_index_to_version_table -------------------------------------------
+
+@test "apt_index_to_version_table: reduces stanzas to package and version" {
+    run apt_index_to_version_table <<< "$GCC_PUBLISHED_INDEX"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"g++ 4:16.1.0-1ubuntu1"* ]]
+    [[ "$output" == *"gcc 4:16.1.0-1ubuntu1"* ]]
+}
+
+# A Version with no Package ahead of it is a malformed index, not a package.
+@test "apt_index_to_version_table: drops a version with no package stanza" {
+    run apt_index_to_version_table <<< "Version: 9.9.9
+"
+    [ "$output" = "" ]
+}
+
+# ---- apt_resolve_latest_version -------------------------------------------
+
+# The candidate accounts for pinning and preferences, so while the index is
+# fresh it is the better answer - and no network call is made at all.
+@test "apt_resolve_latest_version: a fresh index keeps the candidate, no fetch" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 60
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu1" ]
+    [ "$(stream_call_count)" = "0" ]
+}
+
+# The defect itself: a stale index, a candidate five days behind, and the
+# repository publishing something newer.
+@test "apt_resolve_latest_version: a stale index yields the published version" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:16.1.0-1ubuntu1" ]
+}
+
+# A held package cannot be upgraded at all, so reporting the repository's newer
+# version would promise an upgrade apt would refuse.
+@test "apt_resolve_latest_version: a held package keeps the candidate" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds "gcc"
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu1" ]
+    [ "$(stream_call_count)" = "0" ]
+}
+
+@test "apt_resolve_latest_version: an unreachable repository keeps the candidate" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_unreachable
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu1" ]
+}
+
+# Only ever forward. A candidate ahead of what the winning origins publish
+# means another source serves the package too, and apt would install that one.
+@test "apt_resolve_latest_version: never moves the answer backward" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "Package: gcc
+Version: 4:14.2.0-1ubuntu1
+Architecture: amd64"
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu1" ]
+}
+
+# The comparison has to be dpkg's, not compare_versions': a dotted-text compare
+# sorts "4:9" above "4:10" and would read the newer release as older.
+@test "apt_resolve_latest_version: compares epochs the way dpkg does" {
+    stub_apt_cache_policy "gcc:
+  Installed: 4:9.5.0-1
+  Candidate: 4:9.5.0-1
+  Version table:
+ *** 4:9.5.0-1 500
+        500 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages
+        100 /var/lib/dpkg/status"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "Package: gcc
+Version: 4:10.1.0-1
+Architecture: amd64"
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:10.1.0-1" ]
+}
+
+# A package no repository serves (a hand-downloaded .deb) has no authority to
+# consult, so the candidate - its own installed version - stands.
+@test "apt_resolve_latest_version: no repository origin means no fetch" {
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 100
+        100 /var/lib/dpkg/status"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+
+    run apt_resolve_latest_version "claude-desktop" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "2.19675.1" ]
+    [ "$(stream_call_count)" = "0" ]
+}
+
+@test "apt_resolve_latest_version: SYSUPDATE_APT_PUBLISHED_LOOKUP=false opts out" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+    export SYSUPDATE_APT_PUBLISHED_LOOKUP=false
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu1" ]
+    [ "$(stream_call_count)" = "0" ]
+}
+
+@test "apt_resolve_latest_version: non-zero when given no package name" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    run apt_resolve_latest_version ""
+    [ "$status" -ne 0 ]
+}
+
+# ---- caching ---------------------------------------------------------------
+
+# gcc, python3 and fwupd all come from resolute/main; the index behind them is
+# ~1.8 MB compressed, so it must be fetched once per run, not once per snippet.
+@test "apt_repo_version_table: one origin is fetched once per run" {
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+
+    run apt_repo_published_version "gcc" "http://archive.ubuntu.com/ubuntu" "resolute" "main" "amd64"
+    [ "$output" = "4:16.1.0-1ubuntu1" ]
+    run apt_repo_published_version "g++" "http://archive.ubuntu.com/ubuntu" "resolute" "main" "amd64"
+    [ "$output" = "4:16.1.0-1ubuntu1" ]
+    [ "$(stream_call_count)" = "1" ]
+}
+
+# One timeout per run, not one per snippet behind the same unreachable origin.
+@test "apt_repo_version_table: an unreachable origin is retried no further" {
+    isolate_apt_index_cache
+    stub_repo_index_unreachable
+
+    run apt_repo_version_table "http://archive.ubuntu.com/ubuntu" "resolute" "main" "amd64"
+    [ "$status" -ne 0 ]
+    run apt_repo_version_table "http://archive.ubuntu.com/ubuntu" "resolute" "main" "amd64"
+    [ "$status" -ne 0 ]
+    [ "$(stream_call_count)" = "1" ]
+}
+
+@test "apt_repo_published_version: nothing for a package the index omits" {
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    run apt_repo_published_version "nope" "http://archive.ubuntu.com/ubuntu" "resolute" "main" "amd64"
+    [ "$status" -ne 0 ]
+    [ "$output" = "" ]
+}
+
+# ---- apt_version_gt --------------------------------------------------------
+
+@test "apt_version_gt: true only when strictly newer" {
+    run apt_version_gt "4:10.1.0" "4:9.5.0"
+    [ "$status" -eq 0 ]
+    run apt_version_gt "4:9.5.0" "4:10.1.0"
+    [ "$status" -ne 0 ]
+    run apt_version_gt "1.2.3" "1.2.3"
+    [ "$status" -ne 0 ]
+    run apt_version_gt "" "1.2.3"
+    [ "$status" -ne 0 ]
+}
+
+# ---- get_apt_latest_version ------------------------------------------------
+
+# The four apt-sourced snippets reach the resolver through here, so the stale
+# index has to be answered without changing the shape of what they compare:
+# the trailing Debian revision stays stripped.
+@test "get_apt_latest_version: resolves past a stale index, revision stripped" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+
+    run get_apt_latest_version "gcc"
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:16.1.0" ]
+}
+
+@test "get_apt_latest_version: a fresh index still reports the candidate" {
+    stub_apt_cache_policy "$GCC_POLICY"
+    stub_archive_lists 60
+    isolate_apt_index_cache
+    stub_repo_index_stream "$GCC_PUBLISHED_INDEX"
+    stub_apt_mark_holds ""
+
+    run get_apt_latest_version "gcc"
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0" ]
+}
+
+@test "get_apt_latest_version: non-zero when given no package name" {
+    run get_apt_latest_version ""
+    [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# apt_package_origin_pool
+#
+# The package's own version table names only the pockets that already held a
+# version when the local index was last fetched - for an archive package that
+# is usually the frozen release pocket alone, while its updates land in
+# <suite>-updates and <suite>-security. Those are exactly the pockets a
+# months-old index cannot point at, so the pool adds the siblings apt knows at
+# the same priority in the same archive family.
+# ---------------------------------------------------------------------------
+
+# `apt-cache policy <pkg>` and `apt-cache policy` answer different questions,
+# so they need different canned replies.
+stub_apt_cache_policies() {
+    export STUB_APT_POLICY="$1"
+    export STUB_APT_GLOBAL_POLICY="$2"
+    apt-cache() {
+        if [ "$#" -ge 2 ]; then
+            printf '%s\n' "$STUB_APT_POLICY"
+        else
+            printf '%s\n' "$STUB_APT_GLOBAL_POLICY"
+        fi
+    }
+    export -f apt-cache
+}
+
+# This machine's own index list, trimmed: the Ubuntu pockets, Mozilla pinned to
+# 1000, and three unrelated third-party repositories that merely share
+# priority 500 and the component name.
+GLOBAL_POLICY='Package files:
+ 100 /var/lib/dpkg/status
+     release a=now
+ 1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+     release o=packages.mozilla.org,a=mozilla,n=mozilla,l=mozilla,c=main,b=amd64
+ 500 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages
+     release v=26.04,o=Ubuntu,a=resolute,n=resolute,l=Ubuntu,c=main,b=amd64
+ 500 http://archive.ubuntu.com/ubuntu resolute/universe amd64 Packages
+     release v=26.04,o=Ubuntu,a=resolute,n=resolute,l=Ubuntu,c=universe,b=amd64
+ 500 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 Packages
+     release v=26.04,o=Ubuntu,a=resolute-updates,n=resolute,l=Ubuntu,c=main,b=amd64
+ 500 http://security.ubuntu.com/ubuntu resolute-security/main amd64 Packages
+     release v=26.04,o=Ubuntu,a=resolute-security,n=resolute,l=Ubuntu,c=main,b=amd64
+ 500 https://dl.google.com/linux/chrome-stable/deb stable/main amd64 Packages
+     release o=Google LLC,a=stable,n=stable,l=Google,c=main,b=amd64
+ 500 https://downloads.cursor.com/aptrepo stable/main amd64 Packages
+     release o=Cursor,a=stable,n=stable,l=Cursor,c=main,b=amd64'
+
+@test "apt_package_winning_priority: the highest priority serving the package" {
+    stub_apt_cache_policy "firefox:
+  Installed: 159.0~build1
+  Candidate: 159.0~build1
+  Version table:
+     1:1snap1-0ubuntu9.1 -1
+        500 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 Packages
+ *** 159.0~build1 1000
+       1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages"
+    run apt_package_winning_priority "firefox"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1000" ]
+}
+
+@test "apt_package_winning_priority: non-zero when no repository serves it" {
+    stub_apt_cache_policy "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 100
+        100 /var/lib/dpkg/status"
+    run apt_package_winning_priority "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+@test "apt_known_index_origins: one line per index, arch duplicates collapsed" {
+    stub_apt_cache_policies "" "$GLOBAL_POLICY"
+    run apt_known_index_origins
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"500|http://security.ubuntu.com/ubuntu|resolute-security|main"* ]]
+    [[ "$output" == *"1000|https://packages.mozilla.org/apt|mozilla|main"* ]]
+    # The dpkg status pin is not an index.
+    [[ "$output" != *"dpkg"* ]]
+    [ "$(printf '%s\n' "$output" | wc -l)" = "7" ]
+}
+
+@test "apt_host_family: reduces a base URL to its last two host labels" {
+    run apt_host_family "http://archive.ubuntu.com/ubuntu"
+    [ "$output" = "ubuntu.com" ]
+    run apt_host_family "http://security.ubuntu.com/ubuntu"
+    [ "$output" = "ubuntu.com" ]
+    run apt_host_family "https://packages.mozilla.org/apt"
+    [ "$output" = "mozilla.org" ]
+    run apt_host_family "http://localhost:8080/debian"
+    [ "$output" = "localhost" ]
+}
+
+# gcc on this machine: the stale index knows only the frozen release pocket.
+@test "apt_package_origin_pool: adds the updates and security pockets" {
+    stub_apt_cache_policies "$GCC_POLICY" "$GLOBAL_POLICY"
+    run apt_package_origin_pool "gcc"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"http://archive.ubuntu.com/ubuntu|resolute|main"* ]]
+    [[ "$output" == *"http://archive.ubuntu.com/ubuntu|resolute-updates|main"* ]]
+    [[ "$output" == *"http://security.ubuntu.com/ubuntu|resolute-security|main"* ]]
+    [ "$(printf '%s\n' "$output" | wc -l)" = "3" ]
+}
+
+# A different component of the same release is a different package set, and an
+# unrelated repository that merely shares priority 500 is not a sibling.
+@test "apt_package_origin_pool: no other component, no unrelated repository" {
+    stub_apt_cache_policies "$GCC_POLICY" "$GLOBAL_POLICY"
+    run apt_package_origin_pool "gcc"
+    [[ "$output" != *"universe"* ]]
+    [[ "$output" != *"dl.google.com"* ]]
+    [[ "$output" != *"cursor.com"* ]]
+}
+
+# Firefox's winning priority is Mozilla's 1000, so no Ubuntu pocket joins the
+# pool - reporting one would promise an upgrade apt is pinned never to make.
+@test "apt_package_origin_pool: a pinned repository pulls in no Ubuntu pocket" {
+    stub_apt_cache_policies "firefox:
+  Installed: 159.0~build1
+  Candidate: 159.0~build1
+  Version table:
+     1:1snap1-0ubuntu9.1 -1
+        500 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 Packages
+ *** 159.0~build1 1000
+       1000 https://packages.mozilla.org/apt mozilla/main amd64 Packages
+        100 /var/lib/dpkg/status" "$GLOBAL_POLICY"
+    run apt_package_origin_pool "firefox"
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://packages.mozilla.org/apt|mozilla|main" ]
+}
+
+@test "apt_package_origin_pool: none when no repository serves the package" {
+    stub_apt_cache_policies "claude-desktop:
+  Installed: 2.19675.1
+  Candidate: 2.19675.1
+  Version table:
+ *** 2.19675.1 100
+        100 /var/lib/dpkg/status" "$GLOBAL_POLICY"
+    run apt_package_origin_pool "claude-desktop"
+    [ "$status" -ne 0 ]
+}
+
+# The whole point of widening the pool: the candidate the stale release pocket
+# justifies is superseded by a version published only in -updates.
+@test "apt_resolve_latest_version: finds a version published only in -updates" {
+    stub_apt_cache_policies "$GCC_POLICY" "$GLOBAL_POLICY"
+    stub_archive_lists 432000
+    isolate_apt_index_cache
+    stub_apt_mark_holds ""
+
+    # Only the -updates pocket carries the newer build.
+    fetch_debian_repo_index_stream() {
+        case "$2" in
+            resolute-updates) printf 'Package: gcc\nVersion: 4:15.2.0-5ubuntu2\nArchitecture: amd64\n' ;;
+            *) printf 'Package: gcc\nVersion: 4:15.2.0-5ubuntu1\nArchitecture: amd64\n' ;;
+        esac
+    }
+
+    run apt_resolve_latest_version "gcc" 3600
+    [ "$status" -eq 0 ]
+    [ "$output" = "4:15.2.0-5ubuntu2" ]
+}
