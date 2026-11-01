@@ -37,6 +37,7 @@ probe() {
         TEST_DEST="$BATS_TEST_TMPDIR/hyprland" \
         TEST_CFG_LOG="$BATS_TEST_TMPDIR/cmake-configure.log" \
         TEST_KEEP_LOG="$BATS_TEST_TMPDIR/kept-configure.log" \
+        TEST_BIN="$BATS_TEST_TMPDIR/bin" \
         SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1 \
         bash -c 'source "$SETUP"
 DEST="$TEST_DEST"
@@ -497,6 +498,93 @@ EOF
 
 @test "explain_configure_failure: the configure failure path calls it" {
     run grep -cE '^[[:space:]]+explain_configure_failure "\$cfg_log"$' "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# report_unmanaged_links
+#
+# update-alternatives will not replace a path that is a real file it does not
+# own. It says so in one line among hundreds, and afterwards the group looks
+# right — `--display` lists the slave, /etc/alternatives/<name> points at the new
+# build — while PATH still finds the old binary. That happened here on
+# 2026-10-31: Hyprland and hyprctl were links to a freshly built 0.57.0 while
+# /usr/local/bin/hyprpm was still a 2025-12-14 file from an earlier /usr/local
+# source install, so the compositor was ten months newer than its plugin manager.
+# ---------------------------------------------------------------------------
+
+@test "report_unmanaged_links: a link into /etc/alternatives is ours, and silent" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        ln -s /etc/alternatives/hyprpm "$TEST_BIN/hyprpm"
+        rc=0
+        report_unmanaged_links "$TEST_BIN/hyprpm" 2>&1 || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "status=0" ]
+}
+
+@test "report_unmanaged_links: a regular file is reported with the fix" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        printf "#!/bin/sh\n" > "$TEST_BIN/hyprpm"
+        rc=0
+        report_unmanaged_links "$TEST_BIN/hyprpm" 2>&1 || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is a regular file"* ]]
+    [[ "$output" == *"--skip-build"* ]]
+    [[ "$output" == *"status=1"* ]]
+}
+
+@test "report_unmanaged_links: a link pointing somewhere else is reported too" {
+    # The shape left behind by an old source install that symlinked its own
+    # binary into /usr/local/bin: a link, but not one update-alternatives owns.
+    probe '
+        mkdir -p "$TEST_BIN"
+        ln -s /opt/elsewhere/bin/hyprpm "$TEST_BIN/hyprpm"
+        rc=0
+        report_unmanaged_links "$TEST_BIN/hyprpm" 2>&1 || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is a symlink to /opt/elsewhere/bin/hyprpm"* ]]
+    [[ "$output" == *"status=1"* ]]
+}
+
+@test "report_unmanaged_links: a path that does not exist is not a problem" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        rc=0
+        report_unmanaged_links "$TEST_BIN/absent" 2>&1 || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "status=0" ]
+}
+
+@test "report_unmanaged_links: among several paths, only the bad one is named" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        ln -s /etc/alternatives/Hyprland "$TEST_BIN/Hyprland"
+        ln -s /etc/alternatives/hyprctl  "$TEST_BIN/hyprctl"
+        printf "#!/bin/sh\n" > "$TEST_BIN/hyprpm"
+        rc=0
+        report_unmanaged_links "$TEST_BIN/Hyprland" "$TEST_BIN/hyprctl" "$TEST_BIN/hyprpm" 2>&1 || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/hyprpm is a regular file"* ]]
+    [[ "$output" != *"/hyprctl is"* ]]
+    [[ "$output" != *"/Hyprland is"* ]]
+    [[ "$output" == *"status=1"* ]]
+}
+
+@test "report_unmanaged_links: the registration path calls it" {
+    run grep -cE '^report_unmanaged_links "\$LINK" /usr/local/bin/hyprctl /usr/local/bin/hyprpm \|\| true$' "$SETUP"
     [ "$status" -eq 0 ]
     [ "$output" = "1" ]
 }

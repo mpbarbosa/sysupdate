@@ -18,9 +18,13 @@ guard, each failing on a different and more interesting thing than the last.
 | previous generation | `/opt/hyprland.previous/bin/Hyprland` | the 0.56.2 build — present, **not runnable in place**, see the note under incident 3 |
 | generic link | `/usr/local/bin/Hyprland` | → `/etc/alternatives/Hyprland` → `/opt/hyprland/bin/Hyprland` (0.57.0) |
 | alternatives group | — | `Status: auto`, 1 candidate at priority 56, slaves `hyprctl` + `hyprpm` |
+| generic links | `/usr/local/bin/{Hyprland,hyprctl,hyprpm}` | all three symlinks into `/etc/alternatives/` — `hyprpm` needed a stale 2025 file moved aside first, see incident 3 |
 | greeter session entry | `/usr/local/share/wayland-sessions/hyprland.desktop` | present (Dec 2025, from the old `/usr/local` source install), `Exec=Hyprland` — a bare PATH launch, so it follows the alternatives link |
 
-**Nothing was running Hyprland during any of this.** The session on this machine is GNOME
+**0.57.0 has since been logged into and verified running**: pid from `/opt/hyprland/bin/Hyprland`, both
+monitors up, and the isolated `libaquamarine.so.0.15.1` / `libhyprutils.so.0.14.3` /
+`libhyprgraphics.so.0.5.1` mapped into the live process, so the prefix's RPATH holds at runtime too.
+During the four rebuild attempts, though, nothing was running it. The session was GNOME
 (`XDG_CURRENT_DESKTOP=ubuntu:GNOME`, wayland), there is no `Hyprland` process and no
 `/run/user/1000/hypr` instance, which is why four rebuilds could swap `/opt/hyprland` underneath
 without consequence. 0.57.0 takes effect the next time the Hyprland session is selected at the
@@ -212,6 +216,62 @@ The run took 585 s end to end — four dependencies plus the compositor, all bui
 Note that `g++-16` describes itself as *experimental trunk* — it is what Ubuntu resolute ships
 today, and it is the same snapshot the installed `libstdc++6` was built from, so compiler and
 runtime now match. Once the distro's default `g++` reaches 16, `--cxx` will no longer be needed.
+
+### The slave `update-alternatives` could not take over
+
+0.57.0 ran correctly from the first login, but one of the three generic links was not a link at all:
+
+```
+$ ls -l /usr/local/bin/hyprpm
+-rwxr-xr-x 1 root root 536480 Dec 14  2025 /usr/local/bin/hyprpm     # a real file, not ours
+$ ls -l /etc/alternatives/hyprpm
+lrwxrwxrwx 1 root root 24 Oct 31 20:17 /etc/alternatives/hyprpm -> /opt/hyprland/bin/hyprpm
+```
+
+`update-alternatives` will not replace a path that is a real file it does not own. It said so — once,
+on **line 2025** of the registration output:
+
+```
+update-alternatives: warning: not replacing /usr/local/bin/hyprpm with a link
+```
+
+Afterwards everything *looked* right: `--display Hyprland` listed the slave and
+`/etc/alternatives/hyprpm` pointed at the new build. Only `PATH` disagreed, because
+`/usr/local/bin` precedes everything and held a file left by the old `/usr/local` source install from
+December 2025. So the compositor was 0.57.0 while `hyprpm` — the tool you reach for to rebuild
+plugins after an upgrade, which is exactly what an upgrade creates work for — was ten months older.
+`Hyprland` and `hyprctl` were unaffected; both were already symlinks the group owned.
+
+Fixed by moving the stale binary aside (kept, not deleted) and re-registering:
+
+```bash
+sudo mv /usr/local/bin/hyprpm /usr/local/bin/hyprpm.stale-2025-12-14
+sudo bash scripts/setup-hyprland-alternatives.sh --skip-build
+```
+
+All three now resolve through the group: `/usr/local/bin/{Hyprland,hyprctl,hyprpm}` →
+`/etc/alternatives/*` → `/opt/hyprland/bin/*`.
+
+And the script no longer leaves that to chance. `report_unmanaged_links` checks each managed path
+after registering and prints the offending file with the command that fixes it, as the **last** lines
+of the run rather than one line in the middle. It is deliberately not fatal: the build and the group
+are fine, it is `PATH` that disagrees with them.
+
+### Plugins must be rebuilt per commit, not per release
+
+The first 0.57.0 session rejected a plugin:
+
+```
+ERR [PluginSystem] Plugin ~/.local/share/hyprland/plugins/HyprWindowShade.so
+    could not be loaded. (API version mismatch)
+```
+
+Hyprland's plugin check compares a version ABI string that **begins with the compositor's commit
+hash** — here `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426_aq_0.15_hu_0.14_hg_0.5_hc_0.1_hlg_0.6` — so a
+plugin built against a different commit of the same release is still rejected. Rebuilding it means
+pinning its build to that exact commit and using the same `g++-16`. Nothing else was affected:
+`hyprctl plugin list` reports no plugins loaded, and the session is otherwise clean (two monitors up,
+no `[ERR]` lines in 1.9 MB of log beyond this one).
 
 ### Note: `/opt/hyprland.previous` does not run in place
 
