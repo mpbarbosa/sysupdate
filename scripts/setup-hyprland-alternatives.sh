@@ -23,19 +23,21 @@
 #   sudo bash setup-hyprland-alternatives.sh --with-deps      # also build hypr* libs apt lacks (hyprutils, hyprgraphics)
 #   sudo bash setup-hyprland-alternatives.sh --with-deps=hyprutils,hyprgraphics  # custom dep list
 #   sudo bash setup-hyprland-alternatives.sh --with-deps=aquamarine@v0.14.0       # pin a dep to a tag
-#   sudo bash setup-hyprland-alternatives.sh --cxx clang++    # override the compiler (default: system g++)
+#   sudo bash setup-hyprland-alternatives.sh --cxx clang++    # override the compiler (default: auto, see NOTE)
 #   sudo bash setup-hyprland-alternatives.sh --skip-build     # register only (upstream already in /opt/hyprland)
 #   sudo bash setup-hyprland-alternatives.sh --remove         # tear the group down (leaves both installs)
 #
-# NOTE: builds with the SYSTEM g++ (GCC 15 on resolute) — required so the GCC-15
-# libstdc++ ABI matches apt's C++ libs (GLIBCXX_3.4.34). Do NOT use an older g++.
+# NOTE: the compiler is chosen automatically, starting from the SYSTEM g++ (GCC 15
+# on resolute) — that one's libstdc++ ABI matches apt's C++ libs (GLIBCXX_3.4.34),
+# so an OLDER g++ must never be used (its libstdc++ cannot resolve apt's symbols).
+# A NEWER one is fine and is sometimes required: Hyprland v0.57.0+ calls
+# std::string::subview, which GCC 15's libstdc++ does not have. So when the system
+# g++ cannot compile AND run that call, the script steps up to the newest g++-N on
+# PATH that can (g++-16 here) and says so; if none can, it warns and names the
+# apt package instead of dying 46% into the build. Pass --cxx only to force a
+# particular compiler (e.g. clang++); it is then used as given, with no step-up.
 # For GCC 15's -Wtemplate-body false positive on Hyprland 0.56.2 the script passes
-# -Wno-template-body automatically. Never use an OLDER g++ (its libstdc++ cannot
-# resolve apt's C++ libs). A NEWER one is fine and is sometimes required: Hyprland
-# v0.57.0 calls std::string::subview, which needs GCC 16's libstdc++ — and this
-# machine's libstdc++6 runtime is already GCC 16's, so
-#   sudo apt-get install -y g++-16 && sudo bash … --with-deps --cxx g++-16
-# is the route for it. See docs/hyprland-status.md, incident 3.
+# -Wno-template-body automatically. See docs/hyprland-status.md, incidents 3 and 4.
 #
 # --with-deps builds/installs the latest release of each named dep into
 # /opt/hyprland BEFORE building Hyprland, for when apt's copy is too old or absent.
@@ -125,6 +127,13 @@ fi
 # fails to link ("undefined reference to ...@GLIBCXX_3.4.34"). Use --cxx only to
 # pick another libstdc++-based compiler (e.g. clang++), never an older g++.
 #
+# The system compiler is the STARTING point, not the fixed choice. Hyprland v0.57.1
+# failed to build here on 2026-11-05 because GCC 15's libstdc++ has no
+# std::string::subview while g++-16 was installed and unused: the default was blind,
+# so the one fact that decides the compiler — what its libstdc++ actually provides —
+# was never asked. cxx_can_build_source now asks, and the default steps up (never
+# down, per the ABI rule above) to the newest g++-N on PATH that passes.
+#
 # GCC 15's new -Wtemplate-body eagerly (and, for Hyprland 0.56.2, wrongly) rejects
 # std::ranges::starts_with in a template body even though <algorithm> is included
 # and the standard is C++26 — the name resolves fine at instantiation. So we pass
@@ -145,10 +154,106 @@ derive_cc_for() {
     esac
 }
 
+# cxx_can_build_source <c++-compiler> — can this toolchain both COMPILE and RUN
+# the C++26 library calls Hyprland's source makes? Two different things fail here
+# and they need opposite fixes, so the probe covers both:
+#   * compile: GCC 15's libstdc++ has no std::string::subview, which Hyprland
+#     v0.57.0+ calls. The build used to discover this ~46% in, at
+#     src/ipc/s1/S1.cpp, after cloning, submodules and every dependency.
+#   * run: a binary built against a NEWER libstdc++ than the one the loader will
+#     hand it dies at startup on GLIBCXX_3.4.NN. So the probe is executed, not
+#     just compiled — compiling with g++-16 proves nothing if this machine's
+#     libstdc++6 runtime is still GCC 15's.
+# std::ranges::starts_with is deliberately NOT probed here: the compat shim below
+# supplies it, so a compiler missing only that is still a usable compiler.
+cxx_can_build_source() {
+    local probe_src probe_bin rc=0
+    probe_src="$(mktemp /tmp/hypr-cxx-probe-XXXXXX.cpp)"
+    probe_bin="${probe_src%.cpp}.bin"
+    cat > "$probe_src" <<'CPP'
+#include <string>
+int main() { std::string s = "hyprland"; return s.subview(0, 4) == "hypr" ? 0 : 1; }
+CPP
+    "$1" -std=c++26 -o "$probe_bin" "$probe_src" >/dev/null 2>&1 \
+        && "$probe_bin" >/dev/null 2>&1 || rc=1
+    rm -f "$probe_src" "$probe_bin"
+    return "$rc"
+}
+
+# cxx_major <c++-compiler> — its major version, or "" if it will not say.
+cxx_major() {
+    local v=""
+    v="$("$1" -dumpfullversion -dumpversion 2>/dev/null | head -1)" || v=""
+    echo "${v%%.*}"
+}
+
+# newer_gxx_majors <floor-major> — the major version of every g++-N on PATH with
+# N greater than <floor-major>, newest first. The floor is the ABI rule from the
+# comment above, enforced instead of only documented: apt's C++ libraries want
+# the system libstdc++, so an OLDER g++ is never a candidate — only a newer one.
+# An empty or non-numeric floor yields no candidates, so an unreadable compiler
+# version can never silently open the door to g++-13.
+# No `sort -rn | uniq`: this runs while PATH is being reasoned about, and a
+# caller that narrows PATH to the compilers it wants considered would lose
+# coreutils with it. Pure bash keeps the answer independent of PATH's contents.
+newer_gxx_majors() {
+    local floor="$1" dir f major m seen
+    case "$floor" in ''|*[!0-9]*) return 0 ;; esac
+    local -a dirs=() majors=()
+    IFS=: read -r -a dirs <<< "$PATH"
+    for dir in "${dirs[@]}"; do
+        [ -d "$dir" ] || continue
+        for f in "$dir"/g++-*; do
+            [ -x "$f" ] || continue
+            major="${f##*/g++-}"
+            case "$major" in ''|*[!0-9]*) continue ;; esac
+            [ "$major" -gt "$floor" ] || continue
+            seen=false
+            for m in ${majors[@]+"${majors[@]}"}; do
+                if [ "$m" = "$major" ]; then seen=true; break; fi
+            done
+            [ "$seen" = true ] || majors+=("$major")
+        done
+    done
+    # Descending, so the newest usable compiler is tried first.
+    local i j tmp n=${#majors[@]}
+    for ((i = 0; i < n; i++)); do
+        for ((j = i + 1; j < n; j++)); do
+            if [ "${majors[j]}" -gt "${majors[i]}" ]; then
+                tmp="${majors[i]}"; majors[i]="${majors[j]}"; majors[j]="$tmp"
+            fi
+        done
+    done
+    for m in ${majors[@]+"${majors[@]}"}; do echo "$m"; done
+}
+
 HYPRLAND_EXTRA_CXXFLAGS=""
 if [ "$SKIP_BUILD" = false ] && [ -z "${SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY:-}" ]; then
-    [ -n "$CXX" ] || CXX="g++"
+    CXX_EXPLICIT=true
+    if [ -z "$CXX" ]; then CXX="g++"; CXX_EXPLICIT=false; fi
     command -v "$CXX" >/dev/null 2>&1 || { echo "error: C++ compiler '$CXX' not found" >&2; exit 1; }
+
+    # When no --cxx was given and the default toolchain's libstdc++ cannot build
+    # what the source calls, step UP to the newest g++-N on PATH that can, rather
+    # than failing 46% into the build. An explicit --cxx is honoured as given.
+    if [ "$CXX_EXPLICIT" = false ] && ! cxx_can_build_source "$CXX"; then
+        picked=""
+        for major in $(newer_gxx_majors "$(cxx_major "$CXX")"); do
+            if cxx_can_build_source "g++-$major"; then picked="g++-$major"; break; fi
+        done
+        if [ -n "$picked" ]; then
+            echo "==> $CXX's libstdc++ has no std::string::subview — stepping up to $picked"
+            CXX="$picked"
+        else
+            # Not fatal: refs before v0.57.0 do not call subview, and this same
+            # compiler built them. Say exactly what will break and where.
+            echo "warning: $CXX's libstdc++ has no std::string::subview, and no newer g++-N" >&2
+            echo "         on PATH can build and run it either. Hyprland v0.57.0 and later" >&2
+            echo "         call it, so ${REF:-the latest release} will fail at src/ipc/s1/S1.cpp." >&2
+            echo "         Fix: sudo apt-get install -y g++-16  (or pass --cxx <compiler>)." >&2
+        fi
+    fi
+
     # Derive the matching C compiler.
     CC="$(derive_cc_for "$CXX")"
     command -v "$CC" >/dev/null 2>&1 || CC="cc"
@@ -512,10 +617,65 @@ EOF
 # it is instant and a running compositor keeps its open inodes), build into a
 # fresh $DEST, and on ANY failure put the old prefix back. On success keep one
 # generation at $DEST.previous so a bad upgrade can be rolled back by hand.
+#
+# The rollback covers every exit path the shell can see, which is not every way a
+# run can end: SIGKILL and SIGHUP leave no chance to undo the move. So a crashed
+# run leaves a half-built $DEST next to an orphaned $DEST.rollback.<pid> holding
+# the real install, and the NEXT run used to stage that wreckage aside as though
+# it were the install worth protecting — orphaning the real one for good. That is
+# what happened here on 2026-11-05 (incident 4 in docs/hyprland-status.md): a
+# run died at ~10:46 with 0.57.0 parked in /opt/hyprland.rollback.1375914, and
+# the next run restored the bin-less leftover and announced the compositor was
+# "back in place". It was not: $DEST had no bin/Hyprland at all.
+#
+# Hence two rules below: a prefix counts as an install only if it can actually
+# run (prefix_is_usable), and an orphan that can run outranks a $DEST that
+# cannot (stage_prefix adopts it).
 PREFIX_BACKUP=""           # set once the old prefix has been moved aside
 PREFIX_COMMITTED=false     # set once the new build has been validated
 
+# prefix_is_usable <dir> — does this directory hold a compositor you could run?
+# bin/Hyprland is the one file whose absence means "this is the wreckage of a
+# failed run", not "this is an install": the build installs it last, after every
+# dependency, so a prefix with libs and no binary is a build that died partway.
+prefix_is_usable() {
+    [ -x "$1/bin/Hyprland" ]
+}
+
+# newest_usable_orphan — the most recent $DEST.rollback.* that holds a runnable
+# build, ignoring this run's own backup. These exist only because a previous run
+# was killed before it could undo its own staging.
+newest_usable_orphan() {
+    local d newest="" newest_t=0 t
+    for d in "$DEST".rollback.*; do
+        [ -d "$d" ] || continue
+        [ "$d" = "$DEST.rollback.$$" ] && continue
+        prefix_is_usable "$d" || continue
+        t="$(stat -c %Y "$d" 2>/dev/null || echo 0)"
+        [ "$t" -gt "$newest_t" ] || continue
+        newest_t="$t"
+        newest="$d"
+    done
+    if [ -n "$newest" ]; then echo "$newest"; fi
+    return 0
+}
+
+# adopt_orphan_if_needed — if $DEST cannot run but a $DEST.rollback.* can, put the
+# orphan back. Both entry paths have the same question to answer before they touch
+# anything: is $DEST actually the install, or the remains of a run that was killed?
+adopt_orphan_if_needed() {
+    if [ ! -e "$DEST" ] || prefix_is_usable "$DEST"; then return 0; fi
+    local orphan
+    orphan="$(newest_usable_orphan)"
+    if [ -z "$orphan" ]; then return 0; fi
+    echo "    $DEST holds no runnable bin/Hyprland — wreckage of an earlier run"
+    echo "    adopting the install a killed run left at $orphan"
+    rm -rf "$DEST"
+    mv "$orphan" "$DEST"
+}
+
 stage_prefix() {
+    adopt_orphan_if_needed
     if [ -e "$DEST" ]; then
         PREFIX_BACKUP="$DEST.rollback.$$"
         rm -rf "$PREFIX_BACKUP"
@@ -533,7 +693,22 @@ rollback_prefix() {
     rm -rf "$DEST"
     mv "$PREFIX_BACKUP" "$DEST"
     PREFIX_BACKUP=""
-    echo "    restored. The compositor you had before this run is back in place." >&2
+    # Report what is there, not what was put back. "Back in place" was printed on
+    # 2026-11-05 over a prefix with no binary in it, which is how a lost install
+    # went unnoticed: the one line that should have raised the alarm said all was
+    # well. A restore of wreckage is still wreckage.
+    if prefix_is_usable "$DEST"; then
+        echo "    restored. The compositor you had before this run is back in place." >&2
+        return 0
+    fi
+    echo "    restored $DEST, but it has NO runnable bin/Hyprland — what was there" >&2
+    echo "    before this run was already incomplete, so nothing here can run." >&2
+    local orphan
+    orphan="$(newest_usable_orphan)"
+    if [ -n "$orphan" ]; then
+        echo "    A runnable build is parked at $orphan (an earlier run was killed" >&2
+        echo "    before it could put it back). Re-running this script adopts it." >&2
+    fi
 }
 
 # Everything the build must undo, on every exit path. rollback_prefix is
@@ -565,6 +740,11 @@ arm_build_rollback() {
     trap cleanup_build EXIT
     trap 'exit 130' INT     # 128 + SIGINT
     trap 'exit 143' TERM    # 128 + SIGTERM
+    trap 'exit 129' HUP     # 128 + SIGHUP — a closed terminal during a 20-minute
+                            # build. Untrapped, bash can die here without running
+                            # EXIT, which leaves exactly the orphaned-backup state
+                            # found on 2026-11-05. SIGKILL still cannot be trapped,
+                            # which is why stage_prefix also adopts an orphan.
 }
 
 # Runs once the new build is validated: retire the backup to $DEST.previous.
@@ -731,6 +911,17 @@ if [ "$SKIP_BUILD" = false ]; then
     inst_rc=$?
     set -e
     [ $inst_rc -eq 0 ] || { echo "error: install into $DEST failed" >&2; exit 1; }
+fi
+
+#-------------------------- registration-only recovery --------------------------
+# --skip-build stages nothing, so it used to walk straight into the validation
+# below and die with "not found or not executable" whenever $DEST was the wreckage
+# of a killed run — even with the real install sitting in a $DEST.rollback.* right
+# beside it, which is the state this machine was left in on 2026-11-05. Adopting
+# here makes --skip-build the quick recovery it reads like: the install goes back
+# and the alternatives links are re-registered, with no build and no manual `mv`.
+if [ "$SKIP_BUILD" = true ]; then
+    adopt_orphan_if_needed
 fi
 
 #-------------------------- validate the upstream build --------------------------

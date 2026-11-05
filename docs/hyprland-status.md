@@ -1,14 +1,20 @@
-# Hyprland install status — upstream 0.57.0 installed, built with g++-16
+# Hyprland install status — 0.57.0 built with g++-16, parked by a failed 0.57.1 run
 
-**Status:** ✅ As of 2026-10-31 this machine has **upstream Hyprland 0.57.0** at `/opt/hyprland`
-(tag `v0.57.0`, commit `0aa6745`), built from source with `g++-16` and registered in the
-`update-alternatives` group at priority 56. The 0.56.2 generation it replaced is retained at
+**Status:** ⚠️ As of 2026-11-05 **nothing runnable is at `/opt/hyprland`**: the 0.57.0 build (tag
+`v0.57.0`, commit `0aa6745`, built with `g++-16`) sits at `/opt/hyprland.rollback.1375914`, where a
+killed run left it, and `update-alternatives` is pointing at a path with no binary behind it. The
+install is intact — it is in the wrong directory, not lost. See incidents 4 and 4b, and the recovery
+line at the end of 4b. Until then this page's 2026-10-31 state (below) describes where things stood
+when 0.57.0 was registered in the `update-alternatives` group at priority 56. The 0.56.2 generation it replaced is retained at
 `/opt/hyprland.previous`. The apt package is still absent (removed 2026-08-17), so the group holds
 one candidate, not two.
 **Scope:** incident 1 (below) was a system problem that sysupdate merely reported. **Incident 2 was
 caused by this repo's own `setup-hyprland-alternatives.sh`** — see the fixes recorded there.
 **Incident 3** is the 0.57.0 upgrade: four attempts, three rolled back cleanly by the incident-2
-guard, each failing on a different and more interesting thing than the last.
+guard, each failing on a different and more interesting thing than the last. **Incident 4** is the
+0.57.1 attempt: it repeated incident 3's compiler failure because the fix for that one was written
+down in this file instead of into the script's default — and then **incident 4b**, found while
+checking that rollback: the restore reported success over a prefix with no compositor in it.
 
 | What | Expected path | State on 2026-10-31 |
 | --- | --- | --- |
@@ -29,6 +35,218 @@ During the four rebuild attempts, though, nothing was running it. The session wa
 `/run/user/1000/hypr` instance, which is why four rebuilds could swap `/opt/hyprland` underneath
 without consequence. 0.57.0 takes effect the next time the Hyprland session is selected at the
 greeter.
+
+---
+
+## Incident 4 (2026-11-05) — v0.57.1 failed on the same C++26 call, and the rollback lost the install
+
+Two separate bugs, found one behind the other. The compiler one wasted a build; the rollback one
+left the machine with no runnable compositor **and said everything was fine**.
+
+### What happened
+
+`--snippet hyprland` offered v0.57.1 and the rebuild ran. It failed at 46%, on the same single call
+that cost incident 3 two attempts:
+
+```
+[ 46%] Building CXX object CMakeFiles/hyprland_lib.dir/src/keybinds/InputState.cpp.o
+error: compilation of v0.57.1 failed
+       /tmp/hyprland-build-DWaafp/src/src/ipc/s1/S1.cpp:148:130:
+       error: 'std::string' has no member named 'subview'
+==> This run did not produce a working build — restoring the previous /opt/hyprland
+    restored. The compositor you had before this run is back in place.
+```
+
+The incident-2 rollback worked again, so 0.57.0 is still installed and still runnable. Nothing was
+lost but the build time.
+
+### Root cause: the compiler default was blind, not wrong
+
+`g++-16` — the compiler incident 3 identified, installed and used — was still on this machine,
+unused. The script's default was `CXX="g++"`, the system default, which is GCC 15:
+
+| Compiler | `std::string::subview` | What the default did |
+| --- | --- | --- |
+| `g++` → `g++-15` | absent | **chosen**, every time |
+| `g++-16` | present | installed since 2026-10-31, never considered |
+
+So the one fact that decides the compiler — what its libstdc++ actually provides — was never asked
+about. Incident 3's fix was `--cxx g++-16` typed on the command line, recorded in this file and in
+the script's header comment. The snippet (`update_hyprland.sh`, which runs the setup script for an
+unattended rebuild) passes no `--cxx`, so it could not benefit from a fix that lived in prose.
+
+A header comment is not a default. The route that works has to be the route taken when nobody types
+anything.
+
+### The fix: probe, then step up
+
+`setup-hyprland-alternatives.sh` now chooses the compiler instead of assuming one. With no `--cxx`:
+
+1. `cxx_can_build_source` compiles **and runs** a two-line program calling `std::string::subview`
+   with the candidate compiler. Both halves matter, and they catch opposite failures: compiling
+   catches GCC 15's missing `subview`; *running* catches a binary built against a newer libstdc++
+   than the loader will hand it (`GLIBCXX_3.4.NN` at startup). Compiling with `g++-16` proves
+   nothing on a machine whose `libstdc++6` is still GCC 15's.
+2. If the system `g++` fails that probe, `newer_gxx_majors` lists every `g++-N` on `PATH` with N
+   **greater** than the system compiler's major, newest first, and the first one that passes the
+   probe is used. Newer only, never older — that is the ABI rule from incident 2's notes, now
+   enforced rather than just documented, since an older g++'s libstdc++ cannot resolve apt's C++
+   libraries.
+3. If nothing on `PATH` passes, the script does not die: refs before v0.57.0 do not call `subview`
+   and the system compiler builds them fine. It warns, names the file the build will fail in, and
+   gives the exact `apt-get install` line — before the clone, not 46% into the build.
+
+On this machine the auto path now prints:
+
+```
+==> g++'s libstdc++ has no std::string::subview — stepping up to g++-16
+==> Building with CXX=g++-16 CC=gcc-16 (Hyprland CXXFLAGS: -Wno-template-body)
+```
+
+`--cxx` still overrides and is then used exactly as given, with no step-up — it is for forcing a
+particular compiler (`clang++`), not for working around the default any more.
+
+## Incident 4b — the restore said "back in place" over a prefix with no binary in it
+
+### What the disk actually held
+
+Checking the result of the rolled-back run (`--snippet hyprland --check-only` reported *no runnable
+Hyprland*, and `/usr/local/bin/Hyprland` was a dangling link):
+
+| Path | mtime | Contents |
+| --- | --- | --- |
+| `/opt/hyprland` | 2026-11-05 10:46 | `include/ lib/ share/` — **no `bin/`**; aquamarine 0.16.0, hyprgraphics 0.6.0 |
+| `/opt/hyprland.rollback.1375914` | 2026-10-31 20:17 | the real 0.57.0 install: `bin/Hyprland` (24.1M) + its matching aquamarine 0.15.1 |
+| `/opt/hyprland.previous` | 2026-10-31 00:47 | 0.56.2 |
+
+`update-alternatives --query Hyprland` agreed, in its own way: *"alternative
+/opt/hyprland/bin/Hyprland ... does not exist; removing from list of alternatives"*.
+
+### The symptom that was visible all along: no `hyprctl`
+
+Checked at 11:30 the same day, while a **Hyprland session was live**: pid 5501, its `/proc/5501/exe`
+resolving to `/opt/hyprland.rollback.1375914/bin/Hyprland`, instance `0aa6745f...` — 0.57.0, running
+out of the orphaned directory. The staging move is a rename on one filesystem, so the compositor
+kept its open inodes and never noticed; `readlink` on `exe` simply follows to the new path. The
+compositor was therefore fine. Everything that reaches it by *name* was not:
+
+| Link | Resolves |
+| --- | --- |
+| `/usr/local/bin/Hyprland` | **dangling** — via `/etc/alternatives/Hyprland` → `/opt/hyprland/bin/Hyprland` |
+| `/usr/local/bin/hyprctl` | **dangling** |
+| `/usr/local/bin/hyprpm` | **dangling** |
+
+So `hyprctl version` answered *command not found* inside a working Hyprland session. That is the
+user-visible face of this incident, and it is worth remembering as a diagnostic: a live compositor
+whose `hyprctl` has vanished means the prefix moved under it, not that the compositor is unhealthy.
+`/var/lib/dpkg/alternatives/Hyprland` still holds the candidate at priority 56 with both slaves, so
+putting the directory back at `/opt/hyprland` makes all three links resolve again with no
+re-registration needed.
+
+### Root cause: a killed run orphans its own backup, and the next run stages the wreckage
+
+`mv` preserves mtimes, which is what makes the sequence readable. `/opt/hyprland`'s own mtime is
+10:46 — so the run that printed *"restored ... back in place"* put back a directory created at
+10:46, not the 0.57.0 install from 10-31. Two runs were involved:
+
+1. **~10:40** — run 1 (pid 1375914) staged the working 0.57.0 aside to
+   `/opt/hyprland.rollback.1375914` and built the new dependencies into a fresh `/opt/hyprland`
+   (10:46). It then died **without its EXIT trap running** — SIGKILL and SIGHUP (a closed terminal
+   during a 20-minute build) both do that. Its backup was left parked.
+2. **~11:00** — run 2 found `/opt/hyprland` and dutifully protected it, never asking whether it was
+   an install or wreckage. It staged the bin-less leftover aside, failed on `subview` at 11:07,
+   restored the leftover, and reported the compositor back in place.
+
+So the rollback was not broken; its *premise* was. It assumes `$DEST` is either a good install or
+this run's own half-built prefix, and a killed predecessor creates a third state it has no name for.
+Run 2's message was true of what it did and false about what the user had — the worst combination,
+because that line is the one that would have raised the alarm.
+
+### The fix: a prefix counts as an install only if it can run
+
+* `prefix_is_usable` asks for an executable `bin/Hyprland`. The build installs that last, after
+  every dependency, so libs without a binary is precisely the signature of a build that died
+  partway.
+* `stage_prefix` checks `$DEST` before protecting it. If it cannot run and a `$DEST.rollback.*`
+  orphan can, the orphan is **adopted** — moved back to `$DEST` — and the run proceeds from the
+  real install. Newest orphan wins, by mtime rather than by glob order. A usable `$DEST` is never
+  traded for an orphan.
+* `rollback_prefix` reports what is there rather than what it moved: with no runnable binary it says
+  so, and names the orphan that does have one.
+* `arm_build_rollback` now traps `HUP` too, closing the likeliest way run 1 escaped its own
+  rollback. `SIGKILL` stays untrappable — which is exactly why the adoption above is the real fix
+  and the trap is only a narrowing.
+
+Recovering this machine needs no manual `mv`: re-running the script adopts
+`/opt/hyprland.rollback.1375914`, then builds v0.57.1 on top of it with the probed compiler, and
+restores 0.57.0 if that build fails again.
+
+With a session live, the quick recovery is the better *first* move: it puts `hyprctl` and `hyprpm`
+back at the same version as the compositor you are running (0.57.0), where building v0.57.1 first
+would leave 0.57.1 tools talking to a 0.57.0 compositor until the next login. Per incident 3,
+plugins are built per commit and need rebuilding after the switch either way.
+
+`--skip-build` is that recovery, because the adoption also runs on the registration-only path:
+
+```bash
+sudo bash scripts/setup-hyprland-alternatives.sh --skip-build
+```
+
+It adopts the orphan, re-registers the alternatives group, and builds nothing. Before this incident
+that flag could not recover anything — it stages nothing, so it went straight to the
+`[ ! -x "$UP_HYPR" ]` validation and exited with *"not found or not executable"* while the real
+install sat in a `$DEST.rollback.*` beside it. A flag that means "the install is already there"
+should be able to find the install.
+
+By hand it is two renames, in this order:
+
+```bash
+sudo bash -c 'mv /opt/hyprland /opt/hyprland.failed-0.57.1 && mv /opt/hyprland.rollback.1375914 /opt/hyprland'
+```
+
+`/opt/hyprland` must move out of the way first: `mv src dst` with an existing directory `dst` moves
+`src` *inside* it, which buries the install one level deeper instead of restoring it.
+
+### Why this is not cosmetic: nothing can boot Hyprland in this state
+
+Checked before recommending anything: **no Hyprland on the machine could start.** The session entry
+is `Exec=Hyprland`, a bare PATH launch through the dangling link, and both parked builds fail on
+their own libraries:
+
+```
+/opt/hyprland.rollback.1375914/bin/Hyprland -> libaquamarine.so.14: cannot open shared object file
+/opt/hyprland.previous/bin/Hyprland         -> libaquamarine.so.13: cannot open shared object file
+```
+
+That is the RPATH isolation working exactly as designed, against us. Their `RUNPATH` is
+`/opt/hyprland/lib`, an absolute path — so a prefix moved aside looks for its libraries in whatever
+now occupies `/opt/hyprland`, which the dead run had refilled with 0.16.0 deps (`libaquamarine.so.15`
+where `.so.14` was wanted). The libraries each binary needs are sitting *in the same directory as
+the binary*, and unreachable, because the directory has the wrong name. Forcing the path proves it:
+
+```
+$ LD_LIBRARY_PATH=/opt/hyprland.rollback.1375914/lib /opt/hyprland.rollback.1375914/bin/Hyprland --version
+Hyprland 0.57.0 built from branch at commit 0aa6745f... clean (VERSION: bump to 0.57.0)
+```
+
+The live session survived only because its libraries were mapped before the move. So a logout or
+reboot in this state does not degrade Hyprland, it removes it — the greeter's Hyprland entry fails
+and you land on GNOME. Worth stating plainly in the orphan warning, which is why `rollback_prefix`
+names the parked directory rather than only reporting that the restore happened.
+
+### Verification
+
+`tests/integration/hyprland_setup_prefix.bats` covers all of the above through the existing
+`SYSUPDATE_HYPRLAND_SETUP_DEFINE_ONLY=1` seam, with stub compilers standing in for a real
+toolchain — including the compiles-but-will-not-run case, which is the ABI half of the probe — plus
+the killed-run states for the staging: wreckage at `$DEST` with an orphan to adopt, a usable `$DEST`
+that must not be traded, two orphans where the newer must win, and an orphan that cannot run either.
+
+Each of the eleven new guards was then deleted in turn to confirm a named test went red for it.
+Ten did immediately. The eleventh — *pick the newest orphan* — stayed **green**: the fixture's pids
+happened to list newest-last, so taking the last match it saw passed without comparing mtimes at
+all. The test now uses pids whose glob order disagrees with their mtime order, and asserts that
+disagreement, so it cannot go quietly green that way again.
 
 ---
 
@@ -215,7 +433,9 @@ The run took 585 s end to end — four dependencies plus the compositor, all bui
 
 Note that `g++-16` describes itself as *experimental trunk* — it is what Ubuntu resolute ships
 today, and it is the same snapshot the installed `libstdc++6` was built from, so compiler and
-runtime now match. Once the distro's default `g++` reaches 16, `--cxx` will no longer be needed.
+runtime now match. `--cxx g++-16` was the manual route at the time; since incident 4 the script
+finds that compiler by itself, and once the distro's default `g++` reaches 16 the step-up stops
+firing on its own.
 
 ### The slave `update-alternatives` could not take over
 

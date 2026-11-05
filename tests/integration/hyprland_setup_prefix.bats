@@ -44,7 +44,17 @@ DEST="$TEST_DEST"
 given_installed_build() {
     mkdir -p "$DEST/bin" "$DEST/lib"
     echo "GOOD-BUILD" > "$DEST/bin/Hyprland"
+    chmod +x "$DEST/bin/Hyprland"
     echo "GOOD-LIB"   > "$DEST/lib/libaquamarine.so.13"
+}
+given_orphaned_backup() {   # a killed run'"'"'s backup: $1 = pid, $2 = marker
+    mkdir -p "$DEST.rollback.$1/bin"
+    echo "$2" > "$DEST.rollback.$1/bin/Hyprland"
+    chmod +x "$DEST.rollback.$1/bin/Hyprland"
+}
+given_wreckage() {          # what a killed run leaves at $DEST: libs, no binary
+    mkdir -p "$DEST/lib"
+    echo "NEW-DEP" > "$DEST/lib/libaquamarine.so.16"
 }
 show() { echo "$1=$(cat "$2" 2>/dev/null || echo MISSING)"; }
 '"$1"
@@ -587,4 +597,297 @@ EOF
     run grep -cE '^report_unmanaged_links "\$LINK" /usr/local/bin/hyprctl /usr/local/bin/hyprpm \|\| true$' "$SETUP"
     [ "$status" -eq 0 ]
     [ "$output" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# cxx_can_build_source / newer_gxx_majors — picking a compiler that can build
+#
+# On 2026-11-05 Hyprland v0.57.1 failed ~46% in, at src/ipc/s1/S1.cpp, because
+# the default compiler was the system g++ (GCC 15, no std::string::subview)
+# while g++-16 sat installed and unused. The default now probes instead of
+# assuming, and steps UP (never down — see the ABI note in the script).
+#
+# The probe must both compile AND run: compiling with a newer g++ proves nothing
+# if the loader will hand the binary an older libstdc++. The stub compilers below
+# make that distinction testable without a real toolchain.
+# ---------------------------------------------------------------------------
+
+# A stub `g++` at $TEST_BIN/$1 that compiles anything, writing a "binary" whose
+# exit status is $2. Shell-script output is enough: cxx_can_build_source only
+# executes it.
+stub_cxx_prelude='
+given_stub_cxx() {
+    local name="$1" exit_status="$2" out=""
+    mkdir -p "$TEST_BIN"
+    cat > "$TEST_BIN/$name" <<STUB
+#!/usr/bin/env bash
+out=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in -o) out="\$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "\$out" ] || exit 1
+printf "#!/bin/sh\nexit %s\n" "$exit_status" > "\$out"
+chmod +x "\$out"
+STUB
+    chmod +x "$TEST_BIN/$name"
+}
+'
+
+@test "cxx_can_build_source: a compiler that cannot compile the call is rejected" {
+    probe "$stub_cxx_prelude"'
+        mkdir -p "$TEST_BIN"
+        printf "#!/bin/sh\nexit 1\n" > "$TEST_BIN/g++-nope"
+        chmod +x "$TEST_BIN/g++-nope"
+        rc=0; cxx_can_build_source "$TEST_BIN/g++-nope" || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "status=1" ]
+}
+
+@test "cxx_can_build_source: a compiler whose binary will not run is rejected" {
+    probe "$stub_cxx_prelude"'
+        given_stub_cxx "g++-abi" 1
+        rc=0; cxx_can_build_source "$TEST_BIN/g++-abi" || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "status=1" ]
+}
+
+@test "cxx_can_build_source: a compiler that compiles and runs is accepted" {
+    probe "$stub_cxx_prelude"'
+        given_stub_cxx "g++-good" 0
+        rc=0; cxx_can_build_source "$TEST_BIN/g++-good" || rc=$?
+        echo "status=$rc"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "status=0" ]
+}
+
+@test "cxx_can_build_source: leaves no probe files behind in /tmp" {
+    probe "$stub_cxx_prelude"'
+        given_stub_cxx "g++-good" 0
+        before=$(find /tmp -maxdepth 1 -name "hypr-cxx-probe-*" | wc -l)
+        cxx_can_build_source "$TEST_BIN/g++-good"
+        after=$(find /tmp -maxdepth 1 -name "hypr-cxx-probe-*" | wc -l)
+        echo "before=$before after=$after"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"before=0 after=0"* ]]
+}
+
+@test "newer_gxx_majors: lists only NEWER g++ versions on PATH, newest first" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        for v in 13 14 16 20; do
+            printf "#!/bin/sh\n" > "$TEST_BIN/g++-$v"; chmod +x "$TEST_BIN/g++-$v"
+        done
+        PATH="$TEST_BIN" newer_gxx_majors 15
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "20" ]
+    [ "${lines[1]}" = "16" ]
+    [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "newer_gxx_majors: an unreadable compiler version yields no candidates" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        printf "#!/bin/sh\n" > "$TEST_BIN/g++-13"; chmod +x "$TEST_BIN/g++-13"
+        PATH="$TEST_BIN" newer_gxx_majors ""
+        PATH="$TEST_BIN" newer_gxx_majors "not-a-version"
+        echo "done"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "done" ]
+}
+
+@test "newer_gxx_majors: ignores non-executable files and non-numeric suffixes" {
+    probe '
+        mkdir -p "$TEST_BIN"
+        printf "#!/bin/sh\n" > "$TEST_BIN/g++-16"              # not chmod +x
+        printf "#!/bin/sh\n" > "$TEST_BIN/g++-16.2"; chmod +x "$TEST_BIN/g++-16.2"
+        printf "#!/bin/sh\n" > "$TEST_BIN/g++-trunk"; chmod +x "$TEST_BIN/g++-trunk"
+        PATH="$TEST_BIN" newer_gxx_majors 15
+        echo "done"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "done" ]
+}
+
+@test "compiler selection: the step-up runs only when no --cxx was given" {
+    run grep -cE '^[[:space:]]*if \[ "\$CXX_EXPLICIT" = false \] && ! cxx_can_build_source "\$CXX"; then$' "$SETUP"
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+# ---------------------------------------------------------------------------
+# stage_prefix / rollback_prefix — surviving a run that was KILLED
+#
+# The rollback covers every exit path the shell can see. SIGKILL is not one of
+# them, so a killed run leaves a half-built $DEST beside an orphaned
+# $DEST.rollback.<pid> that holds the real install. On 2026-11-05 the next run
+# staged that wreckage aside as if it were the install, and reported the
+# compositor "back in place" over a prefix with no binary in it — 0.57.0 stayed
+# parked in /opt/hyprland.rollback.1375914. See docs/hyprland-status.md,
+# incident 4.
+# ---------------------------------------------------------------------------
+
+@test "prefix_is_usable: a prefix is an install only if bin/Hyprland can run" {
+    probe '
+        given_installed_build
+        prefix_is_usable "$DEST" && echo "installed=usable" || echo "installed=NOT"
+        chmod -x "$DEST/bin/Hyprland"
+        prefix_is_usable "$DEST" && echo "nonexec=usable" || echo "nonexec=NOT"
+        rm -f "$DEST/bin/Hyprland"
+        prefix_is_usable "$DEST" && echo "nobinary=usable" || echo "nobinary=NOT"
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "installed=usable" ]
+    [ "${lines[1]}" = "nonexec=NOT" ]
+    [ "${lines[2]}" = "nobinary=NOT" ]
+}
+
+@test "stage_prefix: adopts the install a killed run orphaned" {
+    probe '
+        given_wreckage
+        given_orphaned_backup 1375914 "REAL-INSTALL"
+        stage_prefix >/dev/null
+        show "staged" "$PREFIX_BACKUP/bin/Hyprland"
+        echo "orphan_left=$([ -e "$DEST.rollback.1375914" ] && echo yes || echo no)"
+        echo "fresh_dest_empty=$([ -e "$DEST/bin" ] && echo no || echo yes)"
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "staged=REAL-INSTALL" ]
+    [ "${lines[1]}" = "orphan_left=no" ]
+    [ "${lines[2]}" = "fresh_dest_empty=yes" ]
+}
+
+@test "stage_prefix: a usable prefix is never traded for an orphan" {
+    probe '
+        given_installed_build
+        given_orphaned_backup 1375914 "STALE-ORPHAN"
+        stage_prefix >/dev/null
+        show "staged" "$PREFIX_BACKUP/bin/Hyprland"
+        echo "orphan_left=$([ -e "$DEST.rollback.1375914" ] && echo yes || echo no)"
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "staged=GOOD-BUILD" ]
+    [ "${lines[1]}" = "orphan_left=yes" ]
+}
+
+@test "stage_prefix: picks the NEWEST orphan when a run was killed twice" {
+    probe '
+        given_wreckage
+        given_orphaned_backup 999 "OLDER-ORPHAN"
+        touch -d "2026-10-01 12:00" "$DEST.rollback.999"
+        given_orphaned_backup 111 "NEWER-ORPHAN"
+        touch -d "2026-11-01 12:00" "$DEST.rollback.111"
+        echo "glob_order=$(cd "$(dirname "$DEST")" && echo "$(basename "$DEST")".rollback.*)"
+        stage_prefix >/dev/null
+        show "staged" "$PREFIX_BACKUP/bin/Hyprland"
+    '
+    [ "$status" -eq 0 ]
+    # Guard the guard: if the glob ever happens to list them newest-last, this
+    # test stops proving anything about the mtime comparison.
+    [ "${lines[0]}" = "glob_order=hyprland.rollback.111 hyprland.rollback.999" ]
+    [ "${lines[1]}" = "staged=NEWER-ORPHAN" ]
+}
+
+@test "stage_prefix: an orphan with no runnable binary is not adopted" {
+    probe '
+        given_wreckage
+        mkdir -p "$DEST.rollback.333/lib"
+        echo "JUNK" > "$DEST.rollback.333/lib/libaquamarine.so.16"
+        stage_prefix >/dev/null
+        show "staged" "$PREFIX_BACKUP/lib/libaquamarine.so.16"
+        echo "orphan_left=$([ -e "$DEST.rollback.333" ] && echo yes || echo no)"
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "staged=NEW-DEP" ]
+    [ "${lines[1]}" = "orphan_left=yes" ]
+}
+
+@test "rollback_prefix: does not claim a compositor is back when none is there" {
+    probe '
+        given_wreckage
+        stage_prefix >/dev/null
+        rollback_prefix 2>&1
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"back in place"* ]]
+    [[ "$output" == *"NO runnable bin/Hyprland"* ]]
+}
+
+@test "rollback_prefix: still says back in place when the install really returns" {
+    probe '
+        given_installed_build
+        stage_prefix >/dev/null
+        rollback_prefix 2>&1
+        show "restored" "$DEST/bin/Hyprland"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"back in place"* ]]
+    [[ "$output" == *"restored=GOOD-BUILD"* ]]
+}
+
+@test "rollback_prefix: names the orphan holding the real install" {
+    probe '
+        given_wreckage
+        given_orphaned_backup 1375914 "REAL-INSTALL"
+        PREFIX_BACKUP="$DEST.staged"
+        mkdir -p "$PREFIX_BACKUP/lib"
+        rollback_prefix 2>&1
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rollback.1375914"* ]]
+    [[ "$output" == *"adopts it"* ]]
+}
+
+@test "arm_build_rollback: SIGHUP also unwinds the staging" {
+    probe '
+        given_installed_build
+        arm_build_rollback
+        trap -p HUP
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"SIGHUP"* ]]
+    [[ "$output" == *"exit 129"* ]]
+}
+
+@test "adopt_orphan_if_needed: leaves a usable prefix and a missing prefix alone" {
+    probe '
+        given_orphaned_backup 1375914 "REAL-INSTALL"
+        given_installed_build
+        adopt_orphan_if_needed >/dev/null
+        show "usable_untouched" "$DEST/bin/Hyprland"
+        rm -rf "$DEST"
+        adopt_orphan_if_needed >/dev/null
+        echo "absent_stays_absent=$([ -e "$DEST" ] && echo no || echo yes)"
+        echo "orphan_left=$([ -e "$DEST.rollback.1375914" ] && echo yes || echo no)"
+    '
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "usable_untouched=GOOD-BUILD" ]
+    [ "${lines[1]}" = "absent_stays_absent=yes" ]
+    [ "${lines[2]}" = "orphan_left=yes" ]
+}
+
+@test "adopt_orphan_if_needed: the registration-only path calls it" {
+    run grep -A2 -E '^if \[ "\$SKIP_BUILD" = true \]; then$' "$SETUP"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"adopt_orphan_if_needed"* ]]
+}
+
+@test "--skip-build: recovers a wrecked prefix instead of refusing to register" {
+    # The dead end this closes: with $DEST holding no binary, the validation
+    # below printed "not found or not executable" and exited 1, while the real
+    # install sat in $DEST.rollback.*. Driving the whole script is not possible
+    # here (root, /opt, update-alternatives), so assert the two facts that
+    # decide it: the adoption runs BEFORE the validation that used to reject.
+    adopt_line=$(grep -n '^if \[ "\$SKIP_BUILD" = true \]; then$' "$SETUP" | cut -d: -f1)
+    check_line=$(grep -n '^if \[ ! -x "\$UP_HYPR" \]; then$' "$SETUP" | cut -d: -f1)
+    [ -n "$adopt_line" ]
+    [ -n "$check_line" ]
+    [ "$adopt_line" -lt "$check_line" ]
 }
