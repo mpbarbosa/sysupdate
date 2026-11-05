@@ -1385,6 +1385,14 @@ compare_and_report_versions() {
     local latest_version="$2"
     local app_name="${3:-Application}"
     
+    # Keep ANSI codes out of these two messages. print_status echoes to the
+    # terminal but also feeds emit_terminal_event, so the same string becomes
+    # the `message` field of a terminal.line event and of the log entry --
+    # and nothing downstream interprets escapes (there is no ANSI handling in
+    # web/backend/ or web/src/). Wrapping the value in $RED/$NC makes the
+    # dashboard print a literal `Current version: \033[0;31m 2.39.4 \033[0m`,
+    # with the padding spaces showing through even where the color works.
+    # The verdict below is colored instead, by print_warning/print_success.
     print_status "Current version: $current_version"
     print_status "Latest version: $latest_version"
     
