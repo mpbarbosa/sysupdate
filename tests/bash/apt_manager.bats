@@ -288,3 +288,113 @@ OUT
     grep -q -- "--fix-missing" "$APT_CALLS"
     ! grep -q -- "--fix-broken" "$APT_CALLS"
 }
+
+# --- apt_count_upgradable_packages ------------------------------------------
+#
+# The count feeds `check_updates_available`, whose 0 becomes
+# `status: up_to_date, total_updates: 0`. A miss here is a miss in the
+# optimistic direction, so every fixture below is a system WITH updates
+# pending, and the assertions are on the number.
+
+# Put a fake `apt` on PATH printing a canned `apt list --upgradable` body.
+stub_apt_list_upgradable() {
+    STUB_BIN="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$STUB_BIN"
+    {
+        echo '#!/bin/bash'
+        echo "cat <<'LIST'"
+        cat
+        echo 'LIST'
+    } > "$STUB_BIN/apt"
+    chmod +x "$STUB_BIN/apt"
+    PATH="$STUB_BIN:$PATH"
+}
+
+# Positive control: without this the three tests below cannot tell "counts the
+# translated lines" apart from "counts nothing at all".
+@test "apt_count_upgradable_packages: counts an English apt list" {
+    stub_apt_list_upgradable <<'LIST'
+Listing...
+vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [upgradable from: 2:9.1.0016-1ubuntu7.8]
+curl/noble-updates 8.5.0-2ubuntu10.6 amd64 [upgradable from: 8.5.0-2ubuntu10.5]
+git/noble-updates 1:2.43.0-1ubuntu7.3 amd64 [upgradable from: 1:2.43.0-1ubuntu7.2]
+LIST
+    run apt_count_upgradable_packages
+    [ "$status" -eq 0 ]
+    [ "$output" = "3" ]
+}
+
+# The regression. apt translates the bracketed marker, so the old
+# `grep -c "upgradable"` counted 0 here and the caller announced an up-to-date
+# system. Reproduced on this host: C and en_US.UTF-8 both gave 3, pt_BR.UTF-8
+# gave 0.
+@test "apt_count_upgradable_packages: counts a translated apt list" {
+    stub_apt_list_upgradable <<'LIST'
+Listando...
+vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [atualizável de: 2:9.1.0016-1ubuntu7.8]
+curl/noble-updates 8.5.0-2ubuntu10.6 amd64 [atualizável de: 8.5.0-2ubuntu10.5]
+git/noble-updates 1:2.43.0-1ubuntu7.3 amd64 [atualizável de: 1:2.43.0-1ubuntu7.2]
+LIST
+    run apt_count_upgradable_packages
+    [ "$status" -eq 0 ]
+    [ "$output" = "3" ]
+}
+
+# German, to show the fix is not pt_BR-shaped: the marker shares no substring
+# with either of the two above.
+@test "apt_count_upgradable_packages: counts a German apt list" {
+    stub_apt_list_upgradable <<'LIST'
+Auflistung...
+vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [aktualisierbar von: 2:9.1.0016-1ubuntu7.8]
+curl/noble-updates 8.5.0-2ubuntu10.6 amd64 [aktualisierbar von: 8.5.0-2ubuntu10.5]
+LIST
+    run apt_count_upgradable_packages
+    [ "$output" = "2" ]
+}
+
+# The header is translated too, and counting it would report one phantom
+# update on an up-to-date system.
+@test "apt_count_upgradable_packages: zero on an up-to-date system" {
+    stub_apt_list_upgradable <<'LIST'
+Listando...
+LIST
+    run apt_count_upgradable_packages
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+}
+
+# `grep -c` exits 1 when it matches nothing. Unguarded that status leaves the
+# function under `set -e`, which is how an empty list could end a whole run.
+@test "apt_count_upgradable_packages: zero exits successfully under errexit" {
+    stub_apt_list_upgradable <<'LIST'
+Listing...
+LIST
+    run bash -c 'set -eo pipefail
+                 source "'"$REPO_ROOT"'/scripts/lib/core_lib.sh"
+                 source "'"$REPO_ROOT"'/scripts/lib/apt_manager.sh"
+                 n=$(apt_count_upgradable_packages)
+                 echo "count=$n"'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"count=0"* ]]
+}
+
+# End to end over the branch the count feeds, with apt-check pointed at a path
+# that does not exist so the fallback is taken deterministically rather than
+# depending on whether the host has update-notifier installed.
+@test "check_updates_available: a translated apt list still reports updates pending" {
+    stub_apt_list_upgradable <<'LIST'
+Listando...
+vim/noble-updates 2:9.1.0016-1ubuntu7.9 amd64 [atualizável de: 2:9.1.0016-1ubuntu7.8]
+curl/noble-updates 8.5.0-2ubuntu10.6 amd64 [atualizável de: 8.5.0-2ubuntu10.5]
+LIST
+    export SYSUPDATE_APT_CHECK_BIN="$BATS_TEST_TMPDIR/no-such-apt-check"
+    export SYSUPDATE_LOG_FILE="$BATS_TEST_TMPDIR/run-history.jsonl"
+    enable_json_events
+    QUIET_MODE=true
+
+    run check_updates_available
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"update_available"'* ]]
+    [[ "$output" == *'"total_updates":2'* ]]
+    [[ "$output" != *'"status":"up_to_date"'* ]]
+}
