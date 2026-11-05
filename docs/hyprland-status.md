@@ -1,11 +1,21 @@
-# Hyprland install status — 0.57.0 built with g++-16, parked by a failed 0.57.1 run
+# Hyprland install status — upstream 0.57.1 installed, compiler chosen by probe
 
-**Status:** ⚠️ As of 2026-11-05 **nothing runnable is at `/opt/hyprland`**: the 0.57.0 build (tag
-`v0.57.0`, commit `0aa6745`, built with `g++-16`) sits at `/opt/hyprland.rollback.1375914`, where a
-killed run left it, and `update-alternatives` is pointing at a path with no binary behind it. The
-install is intact — it is in the wrong directory, not lost. See incidents 4 and 4b, and the recovery
-line at the end of 4b. Until then this page's 2026-10-31 state (below) describes where things stood
-when 0.57.0 was registered in the `update-alternatives` group at priority 56. The 0.56.2 generation it replaced is retained at
+**Status:** ✅ As of 2026-11-05 14:11 this machine has **upstream Hyprland 0.57.1** at
+`/opt/hyprland` (tag `v0.57.1`, commit `acc1aa0`), 0 unresolved libraries, registered in the
+`update-alternatives` group with all three generic links resolving again. The 0.57.0 generation it
+replaced is retained at `/opt/hyprland.previous`. The run that produced it passed **no `--cxx`**: the
+installed binary requires `GLIBCXX_3.4.35`, GCC 16's libstdc++, so the automatic step-up chose
+`g++-16` by itself. It also recovered the orphaned prefix from incident 4b on its own — the earlier
+0.56.2 `.previous` is gone and `.previous` now carries the 0.57.0 install's 2026-10-31 20:17 mtime,
+which is only possible if `stage_prefix` adopted the orphan before building.
+
+**The live session is still 0.57.0** (pid 5501, its binary now at `/opt/hyprland.previous/bin/`,
+followed there by renames). 0.57.1 takes effect at the next login. `hyprctl` on `PATH` is 0.57.1's
+and reports the 0.57.0 compositor it is talking to until then. `hyprpm list` shows no plugins, so
+nothing needs rebuilding for the version change (compare incident 3, where plugins did).
+
+This page's 2026-10-31 state (below) describes where things stood when 0.57.0 was registered at
+priority 56. The 0.56.2 generation it replaced is retained at
 `/opt/hyprland.previous`. The apt package is still absent (removed 2026-08-17), so the group holds
 one candidate, not two.
 **Scope:** incident 1 (below) was a system problem that sysupdate merely reported. **Incident 2 was
@@ -233,6 +243,23 @@ The live session survived only because its libraries were mapped before the move
 reboot in this state does not degrade Hyprland, it removes it — the greeter's Hyprland entry fails
 and you land on GNOME. Worth stating plainly in the orphan warning, which is why `rollback_prefix`
 names the parked directory rather than only reporting that the restore happened.
+
+### Outcome: all three fixes fired on the first unattended run
+
+The user ran `--with-deps --ref v0.57.1` with no other flags on 2026-11-05 at ~14:11, and the run
+needed nothing else from anyone:
+
+| Fix | Evidence it fired |
+| --- | --- |
+| compiler step-up | `objdump -T /opt/hyprland/bin/Hyprland` requires `GLIBCXX_3.4.35` — GCC 16's libstdc++, with no `--cxx` passed. GCC 15 would have given `3.4.34` and failed at `S1.cpp` as before. |
+| orphan adoption | No `/opt/hyprland.rollback.*` remains, and `/opt/hyprland.previous` carries the 0.57.0 install's `2026-10-31 20:17` mtime rather than 0.56.2's `00:47`. The orphan was adopted, staged, and retired by `commit_prefix` in one run. |
+| honest rollback | Not exercised: the build succeeded, so there was nothing to restore. Its value stays the staging guard and the message, both covered by tests. |
+
+Worth noting what the rollback's own design made invisible here: the live compositor followed its
+binary through three renames in that run — adopted into `$DEST`, staged aside, then retired to
+`$DEST.previous` — and never noticed, because each step was a rename on one filesystem. That is the
+property that makes the whole atomic-rebuild scheme safe, and the same property that let the install
+get lost in incident 4b when the directory name stopped matching the install.
 
 ### Verification
 
