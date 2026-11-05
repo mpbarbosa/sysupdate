@@ -552,15 +552,39 @@ check_unattended_upgrades() {
     ask_continue
 }
 
+# Number of packages apt reports as upgradable, counted without depending on
+# the locale.
+#
+# `apt list --upgradable` prints one
+# `name/suite version arch [upgradable from: <old>]` line per package, and the
+# bracketed marker is translated: under pt_BR.UTF-8 the same line reads
+# `[atualizável de: <old>]`. Counting with `grep -c "upgradable"` therefore
+# returned 0 on a Portuguese system with updates pending, and this function's
+# caller turns 0 into `status: up_to_date, total_updates: 0` — a miss in the
+# optimistic direction, where the user is told a system that is behind is
+# current.
+#
+# Only the leading `name/suite` is machine-stable (package and suite names are
+# not translated), so that prefix is what gets counted; LC_ALL=C additionally
+# pins apt's own header and warning text. Never count on the marker again.
+apt_count_upgradable_packages() {
+    LC_ALL=C apt list --upgradable 2>/dev/null |
+        grep -cE '^[A-Za-z0-9][A-Za-z0-9.+-]*/' || true
+}
+
 check_updates_available() {
     print_operation_header "🔍 Checking for available package updates..."
-    
-    if [ ! -x "/usr/lib/update-notifier/apt-check" ]; then
-        print_warning "apt-check utility not found at /usr/lib/update-notifier/apt-check"
+
+    # Overridable so the fallback branch below is reachable in tests on a host
+    # that happens to have update-notifier installed. Not a user-facing knob.
+    local apt_check_bin="${SYSUPDATE_APT_CHECK_BIN:-/usr/lib/update-notifier/apt-check}"
+
+    if [ ! -x "$apt_check_bin" ]; then
+        print_warning "apt-check utility not found at $apt_check_bin"
         print_status "Proceeding with upgrade check using alternative method..."
         
         local upgradable_count
-        upgradable_count=$(apt list --upgradable 2>/dev/null | grep -c "upgradable")
+        upgradable_count=$(apt_count_upgradable_packages)
         if [ "$upgradable_count" -gt 0 ]; then
             print_status "Found $upgradable_count packages available for upgrade (via apt list)"
             emit_summary_event "apt_updates" "snippet_id" "$APT_SNIPPET_ID" "package_manager" "apt" "status" "update_available" "total_updates" "$upgradable_count" "security_updates" "unknown"
@@ -573,7 +597,7 @@ check_updates_available() {
     fi
     
     local check_output
-    check_output=$(/usr/lib/update-notifier/apt-check 2>&1)
+    check_output=$("$apt_check_bin" 2>&1)
     local check_exit_code=$?
 
     if [ $check_exit_code -ne 0 ]; then

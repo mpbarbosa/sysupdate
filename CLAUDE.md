@@ -55,6 +55,9 @@ bats tests/bash/core_lib.bats                        # run a single BATS file
 
 Integration/backend tests isolate from the real system via `SYSUPDATE_SNIPPETS_DIR` and
 `SYSUPDATE_SCRIPT_PATH` env overrides pointing at fixtures — never the real snippets/script.
+`SYSUPDATE_APT_CHECK_BIN` does the same for `apt_manager.sh::check_updates_available`: it points
+at the `apt-check` binary, so a test can reach the no-apt-check fallback branch on a host that has
+update-notifier installed. These are test seams, not user-facing flags.
 
 Engineering guides for this repo (when to use each one is in the index below):
 
