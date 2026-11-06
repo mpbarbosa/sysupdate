@@ -925,6 +925,13 @@ been done for this document's claims.
 
 ## 9. Deliberately not drawn
 
+> **Partly expired, 2026-11-06.** The sequence diagram this section points to for the
+> `upgrade_utils.sh` collaboration now exists for one snippet:
+> [`uml-sequence-diagram-calibre.md`](./uml-sequence-diagram-calibre.md) draws the Calibre update
+> path through `config_driven_version_check` and `handle_installer_script_update`, in the terminal
+> and through the bridge. The apt-resolution cluster named below is still undrawn. The reasoning
+> in the table stands as written.
+
 | Candidate | Why not |
 |---|---|
 | a class diagram of the 48 snippets | they have no declared types and no inheritance; 48 boxes each holding one `update_<name>` function and a `CONFIG_FILE` string is a list, not a structure. §2 draws the *protocol* they share instead, and counts the population. |
