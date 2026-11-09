@@ -26,6 +26,8 @@ source_upgrade_snippets() {
     # Load upgrade snippets from ../upgrade_snippets if present.
     # When SNIPPET_ID_FILTER is set, only the snippet with matching ID is sourced.
     SNIPPETS_DIR="${SYSUPDATE_SNIPPETS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upgrade_snippets}"
+    local _failed_snippets=()
+    local _snippet_status
     if [ -d "$SNIPPETS_DIR" ]; then
         for _f in "$SNIPPETS_DIR"/*.sh; do
             [ -r "$_f" ] || continue
@@ -35,8 +37,19 @@ source_upgrade_snippets() {
                 [ "$_id" = "$SNIPPET_ID_FILTER" ] || continue
             fi
             source_snippet_isolated "$_f"
+            _snippet_status=$?
+            if [ "$_snippet_status" -ne 0 ]; then
+                _failed_snippets+=("$(read_snippet_id "$_f"):$_snippet_status")
+            fi
+            print_status "---"
         done
     fi
+
+    if [ "${#_failed_snippets[@]}" -gt 0 ]; then
+        print_warning "Snippets reporting failure: ${_failed_snippets[*]}"
+        return 1
+    fi
+    return 0
 }
 
 # Source one snippet without letting it change the caller's shell options.
