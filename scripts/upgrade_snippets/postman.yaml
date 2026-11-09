@@ -72,7 +72,15 @@ version:
 update:
   method: "auto_detect"
   snap_command: "sudo snap refresh postman"
+  # The "latest" alias, used only when the target version is unknown or its
+  # artifact is not published yet. It is a CloudFront object with a seven-day
+  # TTL, so for up to a week after a release it still serves the previous
+  # build while version.api_url already reports the new one.
   download_url: "https://dl.pstmn.io/download/latest/linux64"
+  # Preferred: ask for the version the API just named, so the download is on
+  # the same channel as the version check. {version} is substituted with the
+  # resolved latest version.
+  versioned_download_url: "https://dl.pstmn.io/download/version/{version}/linux64"
   install_dir: "/opt/Postman"
   # backup_postman moves the previous install aside as
   # <install_dir>.backup.<YYYYmmdd_HHMMSS> on every update. Unbounded, those

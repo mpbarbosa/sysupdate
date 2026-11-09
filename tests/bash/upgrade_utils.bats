@@ -889,6 +889,12 @@ for arg in "$@"; do
     prev="$arg"
 done
 
+for arg in "$@"; do
+    case "$arg" in
+        -I|-fsSI) [ "${STUB_CURL_HEAD_FAILS:-false}" = true ] && exit 22; exit 0 ;;
+    esac
+done
+
 if [ -z "$range" ]; then
     [ "${STUB_CURL_API_FAILS:-false}" = true ] && exit 22
     printf '%s' "$STUB_CURL_BODY"
@@ -979,6 +985,38 @@ make_postman_tarball() {
     run get_latest_tarball_version
     [ "$status" -ne 0 ]
     [ -z "$output" ]
+}
+
+# The bug: /download/latest/linux64 is a CloudFront object with a seven-day
+# TTL, so for up to a week after a release it serves the previous build while
+# the version API already reports the new one. A run then downloaded ~200 MB,
+# reinstalled the version already on disk, and failed verification with
+# "Postman tarball version did not change after update".
+@test "resolve_postman_download_url: asks for the version the check reported" {
+    source_postman_functions
+    stub_curl
+    run resolve_postman_download_url "12.36.0"
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://dl.pstmn.io/download/version/12.36.0/linux64" ]
+}
+
+@test "resolve_postman_download_url: falls back to the alias when the artifact is not published yet" {
+    source_postman_functions
+    stub_curl
+    export STUB_CURL_HEAD_FAILS=true
+    run resolve_postman_download_url "99.99.99"
+    [ "$status" -eq 0 ]
+    [ "${lines[${#lines[@]}-1]}" = "https://dl.pstmn.io/download/latest/linux64" ]
+}
+
+@test "resolve_postman_download_url: falls back to the alias when there is no usable version" {
+    source_postman_functions
+    stub_curl
+    for candidate in "" "latest" "unknown" "12.36.0 \$(touch /tmp/pwned)"; do
+        run resolve_postman_download_url "$candidate"
+        [ "$status" -eq 0 ]
+        [ "$output" = "https://dl.pstmn.io/download/latest/linux64" ]
+    done
 }
 
 # ---------------------------------------------------------------------------
