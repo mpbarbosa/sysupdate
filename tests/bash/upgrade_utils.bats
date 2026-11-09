@@ -982,6 +982,237 @@ make_postman_tarball() {
 }
 
 # ---------------------------------------------------------------------------
+# update_postman: bounded backup retention
+#
+# backup_postman moves the previous install aside on every update and nothing
+# ever removed it. On one machine that left 25 /opt/Postman.backup.* directories
+# holding 14 GB. These tests point install_dir at $BATS_TEST_TMPDIR — never the
+# real /opt — and run the pruner against directories they create themselves.
+# ---------------------------------------------------------------------------
+
+# A postman.yaml holding only the keys the pruner reads, with install_dir
+# inside the test tmpdir. Pass an empty retention to leave the key out.
+write_postman_backup_config() {
+    local install_dir="$1"
+    local retention="${2:-}"
+    local config="$BATS_TEST_TMPDIR/postman-backup.yaml"
+
+    {
+        echo "update:"
+        echo "  install_dir: \"$install_dir\""
+        if [ -n "$retention" ]; then
+            echo "  backup_retention: $retention"
+        fi
+    } > "$config"
+
+    CONFIG_FILE="$config"
+}
+
+# Record the argv the pruner hands to sudo, and carry it out for real so the
+# result can also be asserted on disk.
+stub_run_with_sudo_recording() {
+    SUDO_LOG="$BATS_TEST_TMPDIR/sudo.log"
+    : > "$SUDO_LOG"
+    run_with_sudo() {
+        echo "$*" >> "$SUDO_LOG"
+        command "$@"
+    }
+}
+
+# Create backup directories in an order that does NOT match their timestamps,
+# so an implementation that trusted creation order or mtime would fail.
+make_postman_backups() {
+    local install_dir="$1"
+    shift
+    local stamp
+    for stamp in "$@"; do
+        mkdir -p "$install_dir.backup.$stamp/app"
+        echo payload > "$install_dir.backup.$stamp/app/resources"
+    done
+}
+
+@test "get_postman_backup_retention: defaults to 2 when the config says nothing" {
+    source_postman_functions
+    write_postman_backup_config "$BATS_TEST_TMPDIR/Postman" ""
+    run get_postman_backup_retention
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+}
+
+@test "get_postman_backup_retention: rejects a non-numeric configured value" {
+    source_postman_functions
+    write_postman_backup_config "$BATS_TEST_TMPDIR/Postman" '"all"'
+    run get_postman_backup_retention
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+}
+
+@test "prune_postman_backups: keeps the newest N and removes the older ones" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    write_postman_backup_config "$install_dir" 2
+    stub_run_with_sudo_recording
+    # Created oldest-last on purpose: the order on disk is not the order by age.
+    make_postman_backups "$install_dir" \
+        20260923_101500 20261101_090000 20260601_120000 20261105_235959
+
+    run prune_postman_backups
+    [ "$status" -eq 0 ]
+
+    [ -d "$install_dir.backup.20261105_235959" ]
+    [ -d "$install_dir.backup.20261101_090000" ]
+    [ ! -e "$install_dir.backup.20260923_101500" ]
+    [ ! -e "$install_dir.backup.20260601_120000" ]
+
+    # Exactly the two oldest, each through run_with_sudo.
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 2 ]
+    grep -qx "rm -rf -- $install_dir.backup.20260923_101500" "$BATS_TEST_TMPDIR/sudo.log"
+    grep -qx "rm -rf -- $install_dir.backup.20260601_120000" "$BATS_TEST_TMPDIR/sudo.log"
+}
+
+@test "prune_postman_backups: honours a configured retention count" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    write_postman_backup_config "$install_dir" 3
+    stub_run_with_sudo_recording
+    make_postman_backups "$install_dir" \
+        20260923_101500 20261101_090000 20260601_120000 20261105_235959
+
+    run prune_postman_backups
+    [ "$status" -eq 0 ]
+
+    [ -d "$install_dir.backup.20261105_235959" ]
+    [ -d "$install_dir.backup.20261101_090000" ]
+    [ -d "$install_dir.backup.20260923_101500" ]
+    [ ! -e "$install_dir.backup.20260601_120000" ]
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 1 ]
+}
+
+@test "prune_postman_backups: leaves siblings that are not timestamped backups alone" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    write_postman_backup_config "$install_dir" 1
+    stub_run_with_sudo_recording
+    make_postman_backups "$install_dir" 20260601_120000 20261105_235959
+
+    # Everything here shares the prefix but is not what backup_postman writes.
+    mkdir -p "$install_dir.backup.keepme" "$install_dir.backup.2026-06-01"
+    mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+    ln -s "$BATS_TEST_TMPDIR/elsewhere" "$install_dir.backup.20250101_000000"
+    echo note > "$install_dir.backup.20240101_000000"
+
+    run prune_postman_backups
+    [ "$status" -eq 0 ]
+
+    [ -d "$install_dir.backup.keepme" ]
+    [ -d "$install_dir.backup.2026-06-01" ]
+    [ -L "$install_dir.backup.20250101_000000" ]
+    [ -d "$BATS_TEST_TMPDIR/elsewhere" ]
+    [ -f "$install_dir.backup.20240101_000000" ]
+
+    # Only the one real backup past the retention count was removed.
+    [ -d "$install_dir.backup.20261105_235959" ]
+    [ ! -e "$install_dir.backup.20260601_120000" ]
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 1 ]
+    grep -qx "rm -rf -- $install_dir.backup.20260601_120000" "$BATS_TEST_TMPDIR/sudo.log"
+}
+
+@test "prune_postman_backups: does nothing when there are fewer backups than the retention count" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    write_postman_backup_config "$install_dir" 2
+    stub_run_with_sudo_recording
+    make_postman_backups "$install_dir" 20261105_235959
+
+    run prune_postman_backups
+    [ "$status" -eq 0 ]
+
+    [ -d "$install_dir.backup.20261105_235959" ]
+    [ ! -s "$BATS_TEST_TMPDIR/sudo.log" ]
+}
+
+@test "prune_postman_backups: is a no-op when no backup exists at all" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    write_postman_backup_config "$install_dir" 2
+    stub_run_with_sudo_recording
+
+    run prune_postman_backups
+    [ "$status" -eq 0 ]
+    [ ! -s "$BATS_TEST_TMPDIR/sudo.log" ]
+    # The unexpanded glob must never reach rm.
+    [[ "$output" != *'backup.*'* ]]
+}
+
+@test "prune_postman_backups: never removes the backup for the run in flight" {
+    source_postman_functions
+    local install_dir="$BATS_TEST_TMPDIR/Postman"
+    # Retention 0 would otherwise sweep everything.
+    write_postman_backup_config "$install_dir" 0
+    stub_run_with_sudo_recording
+    make_postman_backups "$install_dir" 20260601_120000 20261105_235959
+
+    run prune_postman_backups "$install_dir.backup.20260601_120000"
+    [ "$status" -eq 0 ]
+
+    [ -d "$install_dir.backup.20260601_120000" ]
+    [ ! -e "$install_dir.backup.20261105_235959" ]
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 1 ]
+    grep -qx "rm -rf -- $install_dir.backup.20261105_235959" "$BATS_TEST_TMPDIR/sudo.log"
+}
+
+# Where the pruner is wired in matters as much as what it does: on the failure
+# path the backup IS the installation, and restore_postman_backup needs it.
+# Drive perform_postman_update with every collaborator stubbed out.
+stub_postman_update_collaborators() {
+    PRUNE_LOG="$BATS_TEST_TMPDIR/prune.log"
+    : > "$PRUNE_LOG"
+    resolve_postman_download_url() { echo "http://example.invalid/postman.tar.gz"; }
+    download_with_progress() { : > "$2"; }
+    backup_postman() { POSTMAN_BACKUP_DIR="$BATS_TEST_TMPDIR/Postman.backup.20260601_120000"; }
+    install_postman_tarball() { return "${STUB_INSTALL_RC:-0}"; }
+    verify_postman_tarball_update() { return "${STUB_VERIFY_RC:-0}"; }
+    show_installation_info() { :; }
+    prune_postman_backups() { echo "pruned:${1:-}" >> "$PRUNE_LOG"; }
+    restore_postman_backup() { echo "restored" >> "$PRUNE_LOG"; }
+}
+
+@test "perform_postman_update: prunes after verification, naming the in-flight backup" {
+    source_postman_functions
+    write_postman_backup_config "$BATS_TEST_TMPDIR/Postman" 2
+    stub_postman_update_collaborators
+
+    run perform_postman_update "12.0.0" "12.1.0"
+    [ "$status" -eq 0 ]
+    grep -qx "pruned:$BATS_TEST_TMPDIR/Postman.backup.20260601_120000" "$PRUNE_LOG"
+    ! grep -qx "restored" "$PRUNE_LOG"
+}
+
+@test "perform_postman_update: a failed verification restores the backup and prunes nothing" {
+    source_postman_functions
+    write_postman_backup_config "$BATS_TEST_TMPDIR/Postman" 2
+    stub_postman_update_collaborators
+    export STUB_VERIFY_RC=1
+
+    run perform_postman_update "12.0.0" "12.1.0"
+    [ "$status" -ne 0 ]
+    grep -qx "restored" "$PRUNE_LOG"
+    ! grep -q "^pruned:" "$PRUNE_LOG"
+}
+
+@test "perform_postman_update: a failed install restores the backup and prunes nothing" {
+    source_postman_functions
+    write_postman_backup_config "$BATS_TEST_TMPDIR/Postman" 2
+    stub_postman_update_collaborators
+    export STUB_INSTALL_RC=1
+
+    run perform_postman_update "12.0.0" "12.1.0"
+    [ "$status" -ne 0 ]
+    grep -qx "restored" "$PRUNE_LOG"
+    ! grep -q "^pruned:" "$PRUNE_LOG"
+}
+
+# ---------------------------------------------------------------------------
 # vscode-insiders: post-install verification reads the dpkg version
 # ---------------------------------------------------------------------------
 #

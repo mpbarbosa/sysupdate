@@ -477,6 +477,82 @@ backup_postman() {
     fi
 }
 
+# How many <install_dir>.backup.<timestamp> directories to keep after a
+# verified-successful update, when update.backup_retention says nothing usable.
+POSTMAN_BACKUP_RETENTION_DEFAULT=2
+
+# Read update.backup_retention, treating the config value as untrusted: only a
+# plain non-negative integer is an answer. Anything else falls back to the
+# default rather than to "keep nothing".
+get_postman_backup_retention() {
+    local configured
+    configured=$(get_config "update.backup_retention")
+
+    if [[ "$configured" =~ ^[0-9]+$ ]]; then
+        echo "$configured"
+    else
+        echo "$POSTMAN_BACKUP_RETENTION_DEFAULT"
+    fi
+}
+
+# Keep only the newest N backups that backup_postman has left behind.
+#
+# backup_postman moves the previous install aside on every update and nothing
+# ever removed it: one machine had accumulated 25 directories and 14 GB in
+# /opt. Called only after an update has been verified; never on the restore
+# path, where the backup is still the installation.
+#
+# $1, when given, is the backup for the run in flight. It is never removed,
+# whatever the sort order says about it.
+prune_postman_backups() {
+    local keep_dir="${1:-}"
+    local install_dir retention prefix entry suffix index
+    install_dir=$(get_config "update.install_dir")
+    if [ -z "$install_dir" ]; then
+        return 0
+    fi
+    retention=$(get_postman_backup_retention)
+    prefix="${install_dir}.backup."
+
+    # Be strict about what the glob is allowed to match: only a real directory
+    # (not a symlink, not a file) whose name is exactly the
+    # <install_dir>.backup.<YYYYmmdd_HHMMSS> shape backup_postman writes. A
+    # hand-made sibling such as Postman.backup.keepme is not ours to delete.
+    local candidates=()
+    for entry in "$prefix"*; do
+        if [ ! -d "$entry" ] || [ -L "$entry" ]; then
+            continue
+        fi
+        suffix="${entry#"$prefix"}"
+        if [[ ! "$suffix" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
+            continue
+        fi
+        candidates+=("$entry")
+    done
+
+    if [ "${#candidates[@]}" -le "$retention" ]; then
+        return 0
+    fi
+
+    # The timestamp suffix is fixed-width, so sorting the names byte-wise sorts
+    # them by age. Newest first; everything past the retention count goes.
+    local sorted=()
+    mapfile -t sorted < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -r)
+
+    for ((index = retention; index < ${#sorted[@]}; index++)); do
+        entry="${sorted[index]}"
+        if [ -n "$keep_dir" ] && [ "$entry" = "$keep_dir" ]; then
+            continue
+        fi
+        print_status "Removing old Postman backup: $entry"
+        if ! run_with_sudo rm -rf -- "$entry"; then
+            print_warning "Failed to remove old Postman backup: $entry"
+        fi
+    done
+
+    return 0
+}
+
 restore_postman_backup() {
     local install_dir
     install_dir=$(get_config "update.install_dir")
@@ -611,6 +687,9 @@ perform_postman_update() {
         restore_postman_backup || print_warning "Failed to restore previous Postman backup"
         return 1
     fi
+
+    # Only now that the new install is verified is the backup disposable.
+    prune_postman_backups "$POSTMAN_BACKUP_DIR"
 
     POSTMAN_BACKUP_DIR=""
     
