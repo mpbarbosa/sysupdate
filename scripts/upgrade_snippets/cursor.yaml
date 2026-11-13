@@ -58,6 +58,10 @@ version:
 
 # Update configuration
 update:
+  # How many cursor.AppImage.backup.<timestamp> files to keep after a
+  # verified update. Each image is ~300 MB and nothing used to remove
+  # them; one machine reached 50 of them and 15 GB in /opt/Cursor.
+  backup_retention: 2
   method: "auto_detect"
   download_url_deb: "https://api2.cursor.sh/updates/download/golden/linux-x64-deb/cursor/latest"
   download_url_appimage: "https://api2.cursor.sh/updates/download/golden/linux-x64/cursor/latest"

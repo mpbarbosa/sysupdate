@@ -2952,3 +2952,199 @@ YAML
     # The regex complaint would be noise next to a real crash cause.
     [[ "$output" != *"version.regex"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Shared timestamped-backup retention (Cursor: files, not directories)
+# ---------------------------------------------------------------------------
+
+source_cursor_functions() {
+    local snippets_dir="$BATS_TEST_TMPDIR/cpkg/upgrade_snippets"
+    mkdir -p "$snippets_dir"
+    ln -sfn "$REPO_ROOT/scripts/lib" "$BATS_TEST_TMPDIR/cpkg/lib"
+    # Drop the trailing `update_cursor` call so sourcing defines without running.
+    sed '$d' "$REPO_ROOT/scripts/upgrade_snippets/update_cursor.sh" \
+        > "$snippets_dir/update_cursor.sh"
+    # shellcheck disable=SC1090
+    source "$snippets_dir/update_cursor.sh"
+    CONFIG_FILE="$REPO_ROOT/scripts/upgrade_snippets/cursor.yaml"
+}
+
+write_cursor_backup_config() {
+    local install_dir="$1"
+    local retention="${2:-}"
+    local config="$BATS_TEST_TMPDIR/cursor-backup.yaml"
+
+    {
+        echo "update:"
+        echo "  appimage_install_dir: \"$install_dir\""
+        if [ -n "$retention" ]; then
+            echo "  backup_retention: $retention"
+        fi
+    } > "$config"
+
+    CONFIG_FILE="$config"
+}
+
+# Cursor's backups are FILES. Created in an order that does not match their
+# timestamps, so an implementation trusting creation order or mtime would fail.
+make_cursor_backups() {
+    local install_dir="$1"
+    shift
+    mkdir -p "$install_dir"
+    local stamp
+    for stamp in "$@"; do
+        echo payload > "$install_dir/cursor.AppImage.backup.$stamp"
+    done
+}
+
+@test "prune_cursor_backups: keeps the newest N files and removes the older ones" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 2
+    stub_run_with_sudo_recording
+    make_cursor_backups "$install_dir" \
+        20260923_101500 20261101_090000 20260601_120000 20261105_235959
+
+    run prune_cursor_backups
+    [ "$status" -eq 0 ]
+
+    [ -f "$install_dir/cursor.AppImage.backup.20261105_235959" ]
+    [ -f "$install_dir/cursor.AppImage.backup.20261101_090000" ]
+    [ ! -e "$install_dir/cursor.AppImage.backup.20260923_101500" ]
+    [ ! -e "$install_dir/cursor.AppImage.backup.20260601_120000" ]
+
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 2 ]
+}
+
+@test "prune_cursor_backups: honours a configured retention count" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 3
+    stub_run_with_sudo_recording
+    make_cursor_backups "$install_dir" \
+        20260923_101500 20261101_090000 20260601_120000 20261105_235959
+
+    run prune_cursor_backups
+    [ "$status" -eq 0 ]
+    [ -f "$install_dir/cursor.AppImage.backup.20260923_101500" ]
+    [ ! -e "$install_dir/cursor.AppImage.backup.20260601_120000" ]
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 1 ]
+}
+
+@test "prune_cursor_backups: leaves siblings that are not timestamped backups alone" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 1
+    stub_run_with_sudo_recording
+    make_cursor_backups "$install_dir" 20260601_120000 20261105_235959
+    echo keep > "$install_dir/cursor.AppImage.backup.keepme"
+    echo keep > "$install_dir/cursor.AppImage"
+
+    run prune_cursor_backups
+    [ "$status" -eq 0 ]
+    [ -f "$install_dir/cursor.AppImage.backup.keepme" ]
+    [ -f "$install_dir/cursor.AppImage" ]
+    [ ! -e "$install_dir/cursor.AppImage.backup.20260601_120000" ]
+}
+
+@test "prune_cursor_backups: never removes the backup for the run in flight" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 1
+    stub_run_with_sudo_recording
+    make_cursor_backups "$install_dir" 20260601_120000 20261105_235959
+
+    # The oldest is the one this run just created; retention 1 would drop it.
+    run prune_cursor_backups "$install_dir/cursor.AppImage.backup.20260601_120000"
+    [ "$status" -eq 0 ]
+    [ -f "$install_dir/cursor.AppImage.backup.20260601_120000" ]
+}
+
+# The file/dir distinction is the whole reason the helper takes a kind. A
+# directory carrying the backup name belongs to no updater we run and must
+# survive a prune that is looking for files.
+@test "prune_cursor_backups: ignores a directory wearing the backup name" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 0
+    stub_run_with_sudo_recording
+    make_cursor_backups "$install_dir" 20261105_235959
+    mkdir -p "$install_dir/cursor.AppImage.backup.20260101_000000"
+
+    run prune_cursor_backups
+    [ "$status" -eq 0 ]
+    [ -d "$install_dir/cursor.AppImage.backup.20260101_000000" ]
+    [ ! -e "$install_dir/cursor.AppImage.backup.20261105_235959" ]
+}
+
+@test "prune_cursor_backups: is a no-op when the install dir holds no backups" {
+    source_cursor_functions
+    local install_dir="$BATS_TEST_TMPDIR/Cursor"
+    write_cursor_backup_config "$install_dir" 2
+    stub_run_with_sudo_recording
+    mkdir -p "$install_dir"
+
+    run prune_cursor_backups
+    [ "$status" -eq 0 ]
+    [ "$(wc -l < "$BATS_TEST_TMPDIR/sudo.log")" -eq 0 ]
+}
+
+@test "get_backup_retention: falls back when the config value is not an integer" {
+    source_cursor_functions
+    write_cursor_backup_config "$BATS_TEST_TMPDIR/Cursor" '"all"'
+    run get_backup_retention 2
+    [ "$status" -eq 0 ]
+    [ "$output" = "2" ]
+}
+
+@test "get_backup_retention: takes a plain integer from the config" {
+    source_cursor_functions
+    write_cursor_backup_config "$BATS_TEST_TMPDIR/Cursor" 5
+    run get_backup_retention 2
+    [ "$status" -eq 0 ]
+    [ "$output" = "5" ]
+}
+
+# The FUSE-free read is what makes a version readable at all on a host where
+# unprivileged mounting is denied; it must refuse cleanly rather than hang or
+# print rubbish when handed something that is not a runnable AppImage.
+@test "cursor_appimage_desktop_version: non-zero for a path that is not executable" {
+    source_cursor_functions
+    local img="$BATS_TEST_TMPDIR/not-an.AppImage"
+    echo "not executable" > "$img"
+
+    run cursor_appimage_desktop_version "$img"
+    [ "$status" -ne 0 ]
+    [ "$output" = "" ]
+}
+
+@test "cursor_appimage_desktop_version: non-zero for an empty path" {
+    source_cursor_functions
+    run cursor_appimage_desktop_version ""
+    [ "$status" -ne 0 ]
+}
+
+# It must read the version out of the extracted .desktop, and leave nothing
+# behind in the directory it was called from.
+@test "cursor_appimage_desktop_version: reads X-AppImage-Version and cleans up" {
+    source_cursor_functions
+    local img="$BATS_TEST_TMPDIR/fake.AppImage"
+    cat > "$img" <<'STUB'
+#!/bin/bash
+# Mimic `--appimage-extract '*.desktop'`: write squashfs-root into $PWD.
+mkdir -p squashfs-root
+printf '[Desktop Entry]\nName=Cursor\nX-AppImage-Version=3.30.8\n' \
+    > squashfs-root/cursor.desktop
+STUB
+    chmod +x "$img"
+
+    local workdir="$BATS_TEST_TMPDIR/cwd"
+    mkdir -p "$workdir"
+    cd "$workdir"
+
+    run cursor_appimage_desktop_version "$img"
+    [ "$status" -eq 0 ]
+    [ "$output" = "3.30.8" ]
+    # Nothing extracted into the caller's directory.
+    [ ! -e "$workdir/squashfs-root" ]
+}

@@ -1991,3 +1991,91 @@ pip_failure_reason() {
         printf '%s\n' 'pip exited non-zero with no output'
     fi
 }
+
+# ---------------------------------------------------------------------------
+# Timestamped backup retention
+#
+# Several updaters move the previous install aside as
+# "<install_path>.backup.<YYYYmmdd_HHMMSS>" before writing the new one, and
+# nothing ever removed it. Measured on one machine: 25 directories and 14 GB
+# left by Postman, and 50 AppImages and 15 GB left by Cursor. The two snippets
+# differ only in whether the backup is a directory or a file, so the decision
+# of what is safe to delete lives here once.
+# ---------------------------------------------------------------------------
+
+# Read update.backup_retention, treating the config value as untrusted: only a
+# plain non-negative integer is an answer. Anything else falls back to $1
+# rather than to "keep nothing".
+get_backup_retention() {
+    local fallback="$1"
+    local configured
+    configured=$(get_config "update.backup_retention")
+
+    if [[ "$configured" =~ ^[0-9]+$ ]]; then
+        echo "$configured"
+    else
+        echo "$fallback"
+    fi
+}
+
+# Keep only the newest $3 backups matching "<$1><YYYYmmdd_HHMMSS>".
+#
+#   $1 prefix     the full path up to and including ".backup."
+#   $2 kind       "dir" or "file" — what the updater leaves behind
+#   $3 retention  how many of the newest to keep
+#   $4 label      display name used in messages, e.g. "Cursor"
+#   $5 keep_path  optional; the backup for the run in flight, never removed
+#
+# Call only after an update has been verified, never on the restore path where
+# the backup is still the installation.
+prune_timestamped_backups() {
+    local prefix="$1" kind="$2" retention="$3" label="$4" keep_path="${5:-}"
+    local entry suffix index
+
+    if [ -z "$prefix" ] || [ -z "$retention" ]; then
+        return 0
+    fi
+
+    # Be strict about what the glob may match: the right entry type, never a
+    # symlink, and a name that is exactly the <prefix><timestamp> shape the
+    # updater writes. A hand-made sibling such as Cursor.AppImage.backup.keepme
+    # is not ours to delete.
+    local candidates=()
+    for entry in "$prefix"*; do
+        if [ -L "$entry" ]; then
+            continue
+        fi
+        case "$kind" in
+            dir)  [ -d "$entry" ] || continue ;;
+            file) [ -f "$entry" ] || continue ;;
+            *)    return 0 ;;
+        esac
+        suffix="${entry#"$prefix"}"
+        if [[ ! "$suffix" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
+            continue
+        fi
+        candidates+=("$entry")
+    done
+
+    if [ "${#candidates[@]}" -le "$retention" ]; then
+        return 0
+    fi
+
+    # The timestamp suffix is fixed-width, so sorting the names byte-wise sorts
+    # them by age. Newest first; everything past the retention count goes.
+    local sorted=()
+    mapfile -t sorted < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -r)
+
+    for ((index = retention; index < ${#sorted[@]}; index++)); do
+        entry="${sorted[index]}"
+        if [ -n "$keep_path" ] && [ "$entry" = "$keep_path" ]; then
+            continue
+        fi
+        print_status "Removing old $label backup: $entry"
+        if ! run_with_sudo rm -rf -- "$entry"; then
+            print_warning "Failed to remove old $label backup: $entry"
+        fi
+    done
+
+    return 0
+}

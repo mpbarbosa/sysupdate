@@ -86,6 +86,61 @@ get_cursor_deb_version() {
     dpkg-query -W -f='${Version}\n' cursor 2>/dev/null | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/' | head -1
 }
 
+# How many cursor.AppImage.backup.<timestamp> files to keep after a
+# verified-successful update, when update.backup_retention says nothing usable.
+CURSOR_BACKUP_RETENTION_DEFAULT=2
+
+# Cursor's backup is a file where Postman's is a directory; the rules for what
+# is safe to delete are shared in lib/upgrade_utils.sh.
+prune_cursor_backups() {
+    local keep_file="${1:-}"
+    local install_dir
+    install_dir=$(get_config "update.appimage_install_dir")
+    if [ -z "$install_dir" ]; then
+        return 0
+    fi
+
+    prune_timestamped_backups \
+        "$install_dir/cursor.AppImage.backup." \
+        file \
+        "$(get_backup_retention "$CURSOR_BACKUP_RETENTION_DEFAULT")" \
+        "Cursor" \
+        "$keep_file"
+}
+
+# Read the version the AppImage records about itself, without mounting it.
+#
+# `cursor --version` launches the app, which needs the image's squashfs
+# mounted. Where unprivileged FUSE is denied the run dies with
+#   /usr/bin/fusermount: mount failed: Operation not permitted
+# and prints no version at all -- the machine this was found on reported
+# "Failed to get current Cursor version" on every run for that reason.
+#
+# The type2 runtime can still extract individual files with no mount
+# whatsoever, and the bundled .desktop carries X-AppImage-Version. Measured at
+# 0.02s against a 313 MB image, so this runs BEFORE the launch probe below
+# rather than as its fallback.
+cursor_appimage_desktop_version() {
+    local appimage="$1"
+    local workdir version
+
+    [ -n "$appimage" ] && [ -x "$appimage" ] || return 1
+    command -v timeout &>/dev/null || return 1
+    workdir=$(mktemp -d 2>/dev/null) || return 1
+
+    # --appimage-extract writes squashfs-root/ into the CURRENT directory, so
+    # it has to run somewhere disposable rather than wherever we were invoked.
+    ( cd "$workdir" && timeout 30s "$appimage" --appimage-extract '*.desktop' ) >/dev/null 2>&1
+
+    version=$(grep -hs '^X-AppImage-Version=' "$workdir"/squashfs-root/*.desktop 2>/dev/null \
+                  | head -1 | cut -d= -f2- | extract_cursor_semver)
+
+    rm -rf -- "$workdir"
+
+    [ -n "$version" ] || return 1
+    printf '%s\n' "$version"
+}
+
 get_cursor_appimage_version() {
     local cursor_path
     cursor_path=$(get_cursor_command_path)
@@ -96,6 +151,14 @@ get_cursor_appimage_version() {
 
     local version
     version=$(printf '%s\n' "$cursor_path" | extract_cursor_semver)
+    if [ -n "$version" ]; then
+        printf '%s\n' "$version"
+        return 0
+    fi
+
+    # Embedded metadata first: it needs no mount, so it is the only read that
+    # still works where FUSE is denied, and it is faster than launching the app.
+    version=$(cursor_appimage_desktop_version "$cursor_path")
     if [ -n "$version" ]; then
         printf '%s\n' "$version"
         return 0
@@ -165,6 +228,22 @@ check_cursor_version() {
         failed_msg=$(get_config "messages.failed_version")
         emit_summary_event "version_check" "target" "$APP_DISPLAY_NAME" "status" "unknown" "current_version" "unknown" "latest_version" "unknown"
         print_error "$failed_msg"
+        # Say WHY. Every read path above sends stderr to /dev/null, so the one
+        # line that explains the failure -- typically an AppImage that cannot
+        # mount ("fusermount: mount failed: Operation not permitted") -- was
+        # being swallowed, leaving a bare "Failed to get current Cursor
+        # version" with nothing to act on. Bounded, because where FUSE *does*
+        # work this launches the editor.
+        if command -v timeout &>/dev/null; then
+            local probe_err
+            probe_err=$(timeout 15s cursor --version 2>&1 >/dev/null \
+                            | grep -vE '^[[:space:]]*$' | head -2)
+            if [ -n "$probe_err" ]; then
+                while IFS= read -r _line; do
+                    [ -n "$_line" ] && print_error "  ↳ $_line"
+                done <<< "$probe_err"
+            fi
+        fi
         ask_continue
         return 1
     fi
@@ -247,12 +326,13 @@ perform_cursor_update_appimage() {
         return 1
     fi
 
-    # Back up and replace the existing AppImage
+    # Back up and replace the existing AppImage. `backup` is declared out here
+    # so the prune below can be told which file belongs to the run in flight.
+    local backup=""
     if [[ -f "$install_dir/cursor.AppImage" ]]; then
         local backing_up_msg
         backing_up_msg=$(get_config "messages.backing_up")
         print_status "$backing_up_msg"
-        local backup
         backup="$install_dir/cursor.AppImage.backup.$(date +%Y%m%d_%H%M%S)"
         sudo mv "$install_dir/cursor.AppImage" "$backup" || {
             print_error "Failed to back up existing AppImage"
@@ -284,6 +364,11 @@ perform_cursor_update_appimage() {
     success_msg=$(get_config "messages.update_success")
     print_success "$success_msg"
     show_installation_info "cursor" "$APP_DISPLAY_NAME"
+
+    # Only now that the new image is in place: every run moved the old one
+    # aside and nothing ever removed it. Measured on one machine, 50 images
+    # and 15 GB in /opt/Cursor.
+    prune_cursor_backups "$backup"
     return 0
 }
 
