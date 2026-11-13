@@ -133,6 +133,14 @@ get_current_version_from_config() {
     else
         version_output=$(eval "$version_cmd" 2>/dev/null | head -1)
     fi
+
+    # Carry the raw line back to the caller the same way as stderr above, so a
+    # version command that SUCCEEDED but whose output version.regex failed to
+    # match can be reported as that -- the other half of "unknown -> unknown".
+    if [ -n "${VERSION_CMD_OUTPUT_FILE:-}" ]; then
+        printf '%s\n' "$version_output" > "$VERSION_CMD_OUTPUT_FILE" 2>/dev/null
+    fi
+
     local current_version
     current_version=$(extract_version "$version_output" "$version_regex")
 
@@ -177,13 +185,20 @@ config_driven_version_check() {
     # Get current version, capturing the version command's stderr so we can show
     # WHY it failed (e.g. a broken binary) rather than a bare "failed" message.
     local version_cmd_stderr
+    local version_cmd_output
     VERSION_CMD_STDERR_FILE=$(mktemp 2>/dev/null || echo "")
+    VERSION_CMD_OUTPUT_FILE=$(mktemp 2>/dev/null || echo "")
     CURRENT_VERSION=$(get_current_version_from_config)
     if [ -n "$VERSION_CMD_STDERR_FILE" ]; then
         version_cmd_stderr=$(head -3 "$VERSION_CMD_STDERR_FILE" 2>/dev/null)
         rm -f "$VERSION_CMD_STDERR_FILE"
     fi
+    if [ -n "$VERSION_CMD_OUTPUT_FILE" ]; then
+        version_cmd_output=$(head -1 "$VERSION_CMD_OUTPUT_FILE" 2>/dev/null)
+        rm -f "$VERSION_CMD_OUTPUT_FILE"
+    fi
     VERSION_CMD_STDERR_FILE=""
+    VERSION_CMD_OUTPUT_FILE=""
 
     if [ -z "$CURRENT_VERSION" ]; then
         local error_msg
@@ -199,6 +214,10 @@ config_driven_version_check() {
             while IFS= read -r _line; do
                 [ -n "$_line" ] && print_error "  ↳ $_line"
             done <<< "$version_cmd_stderr"
+        elif [ -n "${version_cmd_output:-}" ]; then
+            # The command ran and printed something; version.regex just didn't
+            # match it. Show both so the config is the obvious place to look.
+            print_error "  ↳ '$version_cmd_output' does not match version.regex: $(get_config "version.regex")"
         fi
         ask_continue
         return 1

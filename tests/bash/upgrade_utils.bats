@@ -2866,3 +2866,89 @@ GLOBAL_POLICY='Package files:
     [ "$status" -eq 0 ]
     [ "$output" = "4:15.2.0-5ubuntu2" ]
 }
+
+# ---------------------------------------------------------------------------
+# version.regex: the shipped Node.js config, and the failure diagnostic
+# ---------------------------------------------------------------------------
+
+# These read nodejs.yaml itself rather than a copy of its pattern. The bug was
+# in the shipped config -- an anchored `$` after the third number -- so a test
+# carrying its own copy of the regex would have stayed green through it.
+
+@test "nodejs.yaml version.regex: keeps a prerelease build's suffix" {
+    local regex
+    regex=$(get_config "version.regex" "$REPO_ROOT/scripts/upgrade_snippets/nodejs.yaml")
+    [ -n "$regex" ]
+    run extract_version "v27.0.0-alpha.0.1.0" "$regex"
+    [ "$output" = "27.0.0-alpha.0.1.0" ]
+}
+
+@test "nodejs.yaml version.regex: extracts a plain stable release" {
+    local regex
+    regex=$(get_config "version.regex" "$REPO_ROOT/scripts/upgrade_snippets/nodejs.yaml")
+    run extract_version "v24.9.0" "$regex"
+    [ "$output" = "24.9.0" ]
+}
+
+@test "nodejs.yaml version.regex: an rc build keeps its suffix too" {
+    local regex
+    regex=$(get_config "version.regex" "$REPO_ROOT/scripts/upgrade_snippets/nodejs.yaml")
+    run extract_version "v25.0.0-rc.1" "$regex"
+    [ "$output" = "25.0.0-rc.1" ]
+}
+
+# Widening the pattern must not make it match anything that isn't a version.
+@test "nodejs.yaml version.regex: rejects a line that is not a version" {
+    local regex
+    regex=$(get_config "version.regex" "$REPO_ROOT/scripts/upgrade_snippets/nodejs.yaml")
+    run extract_version "node: command not found" "$regex"
+    [ "$output" = "" ]
+}
+
+# Writes a config whose version command SUCCEEDS but whose output the regex
+# cannot match -- the shape of the Node.js prerelease failure.
+write_unmatched_version_config() {
+    local version_cmd="$1"
+    cat > "$BATS_TEST_TMPDIR/unmatched.yaml" <<YAML
+application:
+  name: "echo"
+  command: "echo"
+  display_name: "Fixture App"
+messages:
+  checking_updates: "Checking..."
+  failed_version: "Failed to get current Fixture App version"
+version:
+  command: "$version_cmd"
+  regex: '^v([0-9]+\.[0-9]+\.[0-9]+)\$'
+  source: "github"
+  github_owner: "example"
+  github_repo: "example"
+YAML
+    echo "$BATS_TEST_TMPDIR/unmatched.yaml"
+}
+
+@test "config_driven_version_check: names the output version.regex failed to match" {
+    CONFIG_FILE="$(write_unmatched_version_config "echo v27.0.0-alpha.0.1.0")"
+    export CONFIG_FILE
+    QUIET_MODE=true
+
+    run config_driven_version_check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Failed to get current Fixture App version"* ]]
+    # The unmatched line and the pattern that rejected it, so the config is the
+    # obvious place to look instead of a bare "unknown".
+    [[ "$output" == *"v27.0.0-alpha.0.1.0"* ]]
+    [[ "$output" == *"version.regex"* ]]
+}
+
+@test "config_driven_version_check: a broken binary's stderr still wins over its stdout" {
+    CONFIG_FILE="$(write_unmatched_version_config "sh -c 'echo garbage; echo libfoo.so: cannot open shared object file >&2'")"
+    export CONFIG_FILE
+    QUIET_MODE=true
+
+    run config_driven_version_check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"libfoo.so: cannot open shared object file"* ]]
+    # The regex complaint would be noise next to a real crash cause.
+    [[ "$output" != *"version.regex"* ]]
+}
