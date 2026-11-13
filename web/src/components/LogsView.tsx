@@ -9,6 +9,7 @@ interface LogsViewProps {
 
 type StatusFilter = 'all' | 'success' | 'failed';
 
+// The LogsView component displays a searchable and filterable table of log entries, with an option to export the filtered logs as a JSON file.
 export default function LogsView({ logs, themeColor }: LogsViewProps) {
   const accent = getThemeColorHex(themeColor);
   const [search, setSearch] = useState('');

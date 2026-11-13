@@ -573,6 +573,7 @@ apt_count_upgradable_packages() {
 }
 
 check_updates_available() {
+    print_status "APT package manager check for available updates..."
     print_operation_header "🔍 Checking for available package updates..."
 
     # Overridable so the fallback branch below is reachable in tests on a host

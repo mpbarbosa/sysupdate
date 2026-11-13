@@ -42,3 +42,5 @@ check_calibre_update() {
 }
 
 check_calibre_update
+print_status "Calibre update check completed."
+print_status "---"

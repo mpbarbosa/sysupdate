@@ -3,6 +3,7 @@ import type { SystemConfig, TerminalLine, UpdateItem } from '../types';
 import { getActionToneColor, getSeverityColor, getThemeColorHex } from '../theme';
 import { toCardAffordances } from '../updateCard';
 
+// Props for the DashboardView component, which displays available updates and a live output console. 
 interface DashboardViewProps {
   items: UpdateItem[];
   onUpgrade: (id: string) => void;

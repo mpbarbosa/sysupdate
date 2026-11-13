@@ -19,7 +19,7 @@ application:
 
 # Messages
 messages:
-  checking_updates: "Checking Calibre updates..."
+  checking_updates: "--> Checking Calibre updates..."
   install_help: |
     Install Calibre e-book manager
     Reference: https://github.com/kovidgoyal/calibre
