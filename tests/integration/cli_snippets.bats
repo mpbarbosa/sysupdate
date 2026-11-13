@@ -4,6 +4,10 @@
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 FIXTURE_SNIPPETS="$(dirname "$BATS_TEST_FILENAME")/fixtures/snippets"
+# Holds update_fixture_failing.sh (returns 1) and update_fixture_next.sh
+# (succeeds, and sorts after it), kept out of FIXTURE_SNIPPETS so the other
+# suites never run a deliberately failing snippet.
+FAILING_SNIPPETS="$(dirname "$BATS_TEST_FILENAME")/fixtures/snippets_failing"
 SYSUPDATE="$REPO_ROOT/scripts/system_update.sh"
 
 # ---------------------------------------------------------------------------
@@ -79,4 +83,56 @@ SYSUPDATE="$REPO_ROOT/scripts/system_update.sh"
 @test "a filtered run tags the summary with the filtered snippet id" {
     run bash -c "SYSUPDATE_SNIPPETS_DIR='$FIXTURE_SNIPPETS' '$SYSUPDATE' --snippet fixture-outdated --check-only --json-events 2>&1 1>/dev/null"
     echo "$output" | grep -q '"snippet_id":"fixture-outdated"'
+}
+
+# ---------------------------------------------------------------------------
+# a snippet whose update fails must reach the exit code
+# ---------------------------------------------------------------------------
+#
+# The bug, found after a real Postman update failed at its sudo backup step:
+# source_upgrade_snippets threw away each snippet's status (the print_status
+# after it became the function's return value) and every snippet call site
+# ended in a hardcoded `exit 0`. The failed run exited 0 and handle_run_exit
+# wrote it to run-history as "success", so the dashboard and the log both read
+# a green result for an update that had not happened.
+
+@test "a snippet whose update fails makes the filtered run exit non-zero" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --snippet fixture-failing -q 2>&1"
+    [ "$status" -ne 0 ]
+}
+
+@test "a snippet that succeeds still exits 0" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --snippet fixture-next -q 2>&1"
+    [ "$status" -eq 0 ]
+}
+
+@test "a failing snippet names itself instead of failing silently" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --snippet fixture-failing -q 2>&1"
+    echo "$output" | grep -q "fixture-failing"
+}
+
+# A failure must not abort the pass: the remaining snippets still run, and the
+# non-zero status is reported once at the end. update_fixture_next.sh sorts
+# after update_fixture_failing.sh in the directory glob, so its event is only
+# present if the loop carried on.
+@test "a failing snippet does not stop the snippets after it" {
+    run bash -c "SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --check-only --json-events -q 2>&1 1>/dev/null"
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q '"target":"Fixture Next"'
+}
+
+@test "run history records a failed snippet run as failed, not success" {
+    local log="$BATS_TEST_TMPDIR/run-history.jsonl"
+    run bash -c "SYSUPDATE_STATE_DIR='$BATS_TEST_TMPDIR/state' SYSUPDATE_LOG_FILE='$log' SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --snippet fixture-failing -q >/dev/null 2>&1"
+    [ "$status" -ne 0 ]
+    [ -f "$log" ]
+    grep -q '"status":"failed"' "$log"
+    [[ "$(cat "$log")" != *'"status":"success"'* ]]
+}
+
+@test "run history still records a successful snippet run as success" {
+    local log="$BATS_TEST_TMPDIR/run-history.jsonl"
+    run bash -c "SYSUPDATE_STATE_DIR='$BATS_TEST_TMPDIR/state' SYSUPDATE_LOG_FILE='$log' SYSUPDATE_SNIPPETS_DIR='$FAILING_SNIPPETS' '$SYSUPDATE' --snippet fixture-next -q >/dev/null 2>&1"
+    [ "$status" -eq 0 ]
+    grep -q '"status":"success"' "$log"
 }

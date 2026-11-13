@@ -420,6 +420,34 @@ get_latest_tarball_version() {
     return 1
 }
 
+# Pick the URL to download for a known target version.
+#
+# update.download_url is Postman's "latest" alias: a CloudFront object with a
+# seven-day TTL. For up to a week after a release the edge keeps serving the
+# previous build while version.api_url already reports the new one — so a run
+# downloads ~200 MB, reinstalls the version already on disk, and fails
+# verification with "Postman tarball version did not change after update".
+# Asking for the version by name puts the download on the same channel as the
+# version check. Falls back to the alias when there is no usable version, and
+# when the named artifact is not published for linux64 yet.
+resolve_postman_download_url() {
+    local version="$1"
+    local template url
+
+    template=$(get_config "update.versioned_download_url")
+
+    if [ -n "$template" ] && [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+        url="${template//\{version\}/$version}"
+        if curl -fsSI --max-time 30 -o /dev/null "$url" 2>/dev/null; then
+            echo "$url"
+            return 0
+        fi
+        print_warning "Postman $version has no linux64 artifact yet; falling back to the latest download channel"
+    fi
+
+    get_config "update.download_url"
+}
+
 # Detect installation method
 detect_install_method() {
     if command -v snap &>/dev/null && snap list postman &>/dev/null 2>&1; then
@@ -651,7 +679,7 @@ perform_postman_update() {
     local previous_version="$1"
     local latest_version="$2"
     local download_url
-    download_url=$(get_config "update.download_url")
+    download_url=$(resolve_postman_download_url "$latest_version")
     local download_msg
     download_msg=$(get_config "messages.downloading")
     

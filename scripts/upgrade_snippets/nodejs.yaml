@@ -61,9 +61,15 @@ messages:
   update_failed: "Failed to update Node.js"
 
 # Version extraction
+# The regex keeps any prerelease suffix (`v27.0.0-alpha.0.1.0`, `v25.0.0-rc.1`)
+# in the captured version instead of refusing to match it. nvm and the nodejs.org
+# dist tree both hand out prerelease builds, and anchoring on `$` after the third
+# number made every one of them report "Failed to get current Node.js version".
+# compare_versions orders a `-suffix` build below the matching stable release,
+# so the captured value stays usable for the up-to-date verdict.
 version:
   command: "node --version"
-  regex: '^v([0-9]+\.[0-9]+\.[0-9]+)$'
+  regex: '^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$'
   source: "github"
   github_owner: "nodejs"
   github_repo: "node"

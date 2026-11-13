@@ -31,6 +31,7 @@ const pendingCount = (items: UpdateItem[], category: SidebarCategory): number =>
   return scoped.filter((item) => item.status === 'ready' || item.status === 'failed').length;
 };
 
+// The Sidebar component displays a vertical navigation menu for different update categories, along with a button to check for updates. It also shows the number of pending updates for each category.
 export default function Sidebar({
   activeCategory,
   onCategoryChange,

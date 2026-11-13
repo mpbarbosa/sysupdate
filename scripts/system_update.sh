@@ -433,6 +433,18 @@ trap handle_run_exit EXIT
 # MAIN EXECUTION
 #=============================================================================
 
+# Exit status of the upgrade-snippet pass, and therefore of this script.
+#
+# source_upgrade_snippets used to drop each snippet's status (the print_status
+# after it became the function's return value) and every snippet call site
+# ended in a hardcoded `exit 0`. A snippet whose update ran and failed — a
+# Postman update that could not get sudo for its backup, say — exited 0, and
+# handle_run_exit wrote it to run-history as "success". The dashboard and the
+# log both read that code, so a failed update reported green to everything
+# downstream. Set on the main path; the early-exit branches use `exit $?`
+# directly.
+SNIPPET_RUN_STATUS=0
+
 if [ "$CHECK_ONLY_MODE" = true ]; then
     QUIET_MODE=true
 fi
@@ -507,7 +519,7 @@ fi
 if [ -n "$SNIPPET_ID_FILTER" ]; then
     print_section_header "LOAD UPGRADE SNIPPETS"
     source_upgrade_snippets
-    exit 0
+    exit $?
 fi
 
 # Detect package manager
@@ -534,7 +546,7 @@ if [ "$CHECK_ONLY_MODE" = true ]; then
 
     print_section_header "LOAD UPGRADE SNIPPETS"
     source_upgrade_snippets
-    exit 0
+    exit $?
 fi
 
 # Package Manager Specific Operations
@@ -559,6 +571,7 @@ fi
 # Load upgrade snippets
 print_section_header "LOAD UPGRADE SNIPPETS"
 source_upgrade_snippets
+SNIPPET_RUN_STATUS=$?
 
 # System Upgrade Operations (only in full mode)
 if [ "$FULL_MODE" = true ]; then
@@ -582,7 +595,11 @@ fi
 
 # Final status
 echo "=========================================="
-print_success "Comprehensive system update and package management script completed successfully!"
+if [ "$SNIPPET_RUN_STATUS" -eq 0 ]; then
+    print_success "Comprehensive system update and package management script completed successfully!"
+else
+    print_warning "System update finished, but at least one upgrade snippet reported a failure"
+fi
 
 # Show summary of installed packages
 print_status "Summary of installed packages:"
@@ -598,4 +615,4 @@ if [ -f /var/run/reboot-required ]; then
     echo "You can reboot now using: sudo reboot"
 fi
 
-exit 0
+exit "$SNIPPET_RUN_STATUS"

@@ -539,6 +539,7 @@ enable_sudo_askpass_shim() {
         *":$shim_dir:"*) ;;
         *) PATH="$shim_dir:$PATH"; export PATH ;;
     esac
+    print_status "---"
     print_status "No terminal: sudo password prompts are routed through the askpass helper"
     return 0
 }

@@ -28,7 +28,7 @@ application:
 
 # Messages
 messages:
-  checking_updates: "Checking Kitty terminal updates..."
+  checking_updates: "--> Checking Kitty terminal updates..."
   install_help: |
     Install Kitty terminal emulator
     Reference: https://github.com/kovidgoyal/kitty

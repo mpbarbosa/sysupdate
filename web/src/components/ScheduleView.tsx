@@ -11,6 +11,7 @@ interface ScheduleViewProps {
 
 const CRON_FIELDS = ['minute', 'hour', 'day of month', 'month', 'day of week'];
 
+// The ScheduleView component displays a list of scheduled tasks, allowing users to enable/disable tasks and run them immediately. It also shows the last and next run times for each task.
 export default function ScheduleView({ tasks, onToggle, onRunNow, isProcessing, themeColor }: ScheduleViewProps) {
   const accent = getThemeColorHex(themeColor);
 
