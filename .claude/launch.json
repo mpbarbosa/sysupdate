@@ -18,6 +18,24 @@
         "cd web && SYSUPDATE_WEB_PORT=14175 npx vite --port 5174 --strictPort"
       ],
       "port": 5174
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd web && node backend/server.js"
+      ],
+      "port": 4174
+    },
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd web && npx vite --port 5173 --strictPort"
+      ],
+      "port": 5173
     }
   ]
 }
