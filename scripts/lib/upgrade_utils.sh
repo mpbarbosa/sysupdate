@@ -2025,12 +2025,23 @@ get_backup_retention() {
 #   $3 retention  how many of the newest to keep
 #   $4 label      display name used in messages, e.g. "Cursor"
 #   $5 keep_path  optional; the backup for the run in flight, never removed
+#   $6 privilege  optional command prefix for the removal; defaults to
+#                 "run_with_sudo". Pass "" for a backup the invoking user owns,
+#                 so an installation under $HOME does not prompt for a password
+#                 just to delete its own old generations. Omitting the argument
+#                 keeps the original always-sudo behaviour.
 #
 # Call only after an update has been verified, never on the restore path where
 # the backup is still the installation.
 prune_timestamped_backups() {
     local prefix="$1" kind="$2" retention="$3" label="$4" keep_path="${5:-}"
+    local privilege="${6-run_with_sudo}"
     local entry suffix index
+
+    local -a remover=()
+    if [ -n "$privilege" ]; then
+        remover=("$privilege")
+    fi
 
     if [ -z "$prefix" ] || [ -z "$retention" ]; then
         return 0
@@ -2072,7 +2083,7 @@ prune_timestamped_backups() {
             continue
         fi
         print_status "Removing old $label backup: $entry"
-        if ! run_with_sudo rm -rf -- "$entry"; then
+        if ! "${remover[@]}" rm -rf -- "$entry"; then
             print_warning "Failed to remove old $label backup: $entry"
         fi
     done
