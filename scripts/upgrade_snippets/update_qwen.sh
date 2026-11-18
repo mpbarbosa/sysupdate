@@ -14,7 +14,7 @@
 # that manifest is the registry's bytes verbatim, so hashing the registry's
 # manifest gives a comparable digest without pulling anything.
 #
-# Version: 0.1.0
+# Version: 0.2.0
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # License: MIT
@@ -30,33 +30,41 @@ fi
 QWEN_WANTED_MODELS="${SYSUPDATE_QWEN_MODELS:-qwen3:4b}"
 QWEN_REGISTRY_URL="${SYSUPDATE_OLLAMA_REGISTRY_URL:-https://registry.ollama.ai}"
 
-# Every qwen model already on disk, one "name id" pair per line.
+# Every qwen model already on disk, one "name id" pair per line. Matches the
+# model's last path component, so namespaced (user/qwen3) and host-qualified
+# (hf.co/Qwen/...) references count too. Fails when `ollama list` does, so a
+# broken listing is not mistaken for "nothing installed".
 list_installed_qwen_models() {
-    ollama list 2>/dev/null | awk 'NR>1 && $1 ~ /^qwen/ {print $1, $2}' || true
+    local listing
+    listing=$(ollama list 2>/dev/null) || return 1
+    awk 'NR>1 { n = tolower($1); sub(/.*\//, "", n); if (n ~ /^qwen/) print $1, $2 }' <<< "$listing"
 }
 
 # Registry manifest digest (first 12 hex) for a model reference, or empty.
 # qwen3:4b -> /v2/library/qwen3/manifests/4b ; a bare name means tag latest;
 # a namespaced name (user/model) keeps its namespace.
 fetch_qwen_remote_digest() {
-    local ref="$1" name tag repo digest
+    local ref="$1" name tag repo manifest digest
     name="${ref%%:*}"
     tag="latest"
     [ "$name" != "$ref" ] && tag="${ref#*:}"
     case "$name" in
-        */*) repo="$name" ;;
-        *)   repo="library/$name" ;;
+        # Host-qualified (hf.co/...): served by another registry; not checkable here.
+        *.*/*) return 1 ;;
+        */*)   repo="$name" ;;
+        *)     repo="library/$name" ;;
     esac
 
-    digest=$(curl -fsSL --max-time 20 \
+    # Fetch first and check curl's own status: hashing a truncated body would
+    # report a false update instead of an unknown result.
+    manifest=$(curl -fsSL --max-time 20 \
         -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-        "$QWEN_REGISTRY_URL/v2/$repo/manifests/$tag" 2>/dev/null \
-        | sha256sum | cut -c1-12) || true
+        "$QWEN_REGISTRY_URL/v2/$repo/manifests/$tag" 2>/dev/null) || return 1
+    [ -n "$manifest" ] || return 1
 
-    # sha256 of empty input means the fetch failed; reject anything not hex.
-    if [ "$digest" = "e3b0c44298fc" ] || ! [[ "$digest" =~ ^[0-9a-f]{12}$ ]]; then
-        return 1
-    fi
+    # $(...) strips trailing newlines; the registry's manifest has none.
+    digest=$(printf '%s' "$manifest" | sha256sum | cut -c1-12)
+    [[ "$digest" =~ ^[0-9a-f]{12}$ ]] || return 1
     echo "$digest"
 }
 
@@ -64,6 +72,7 @@ update_qwen_models() {
     if ! command -v ollama &> /dev/null; then
         print_warning "🦙 Ollama not installed - skipping Qwen model updates"
         print_status "💡 Install Ollama from https://ollama.com/download"
+        emit_summary_event "qwen_models" "package_manager" "ollama" "status" "not_installed" "total_updates" "0"
         return 0
     fi
 
@@ -78,10 +87,15 @@ update_qwen_models() {
 
     # name -> local id; wanted models that are not installed get an empty id.
     local -A local_ids=()
-    local name id model
+    local name id model listing
+    if ! listing=$(list_installed_qwen_models); then
+        print_error "Could not list Ollama models"
+        emit_summary_event "qwen_models" "package_manager" "ollama" "status" "unknown" "total_updates" "0"
+        return 1
+    fi
     while read -r name id; do
         [ -n "$name" ] && local_ids["$name"]="$id"
-    done < <(list_installed_qwen_models)
+    done <<< "$listing"
     for model in $QWEN_WANTED_MODELS; do
         [ -n "${local_ids[$model]+x}" ] || local_ids["$model"]=""
     done
@@ -132,7 +146,8 @@ update_qwen_models() {
 
     if [ "$failed" -gt 0 ]; then
         print_error "$failed Qwen model pull(s) failed"
-        emit_summary_event "qwen_models" "package_manager" "ollama" "status" "failed" "total_updates" "0"
+        # The models that failed still need pulling, so they remain pending.
+        emit_summary_event "qwen_models" "package_manager" "ollama" "status" "update_available" "total_updates" "$failed"
         return 1
     fi
 
