@@ -1,0 +1,126 @@
+# BBC BASIC for SDL 2.0 (bbcsdl) Update Configuration
+#
+# Version: 0.1.0-alpha
+# Date: 2026-11-16
+# Author: mpb
+# Repository: https://github.com/mpbarbosa/sysupdate
+# Status: Non-production (Alpha)
+#
+# Version History:
+#   0.1.0-alpha (2026-11-16) - Initial alpha version
+#                            - Current version read out of the installed ELF's
+#                              embedded banner (bbcsdl has no --version flag)
+#                            - Latest version read from the vendor changelog
+#                              table, the same channel the download zip serves
+#                            - Updates by replacing the install directory from
+#                              the arch-matched zip, with bounded backups
+#
+
+# Application identifiers
+application:
+  name: "bbcsdl"
+  command: "bbcsdl"
+  display_name: "BBC BASIC for SDL 2.0"
+  homepage: "https://www.bbcbasic.co.uk/bbcsdl/index.html"
+
+# Messages
+messages:
+  checking_updates: "Checking BBC BASIC for SDL 2.0 (bbcsdl) updates..."
+  install_help: |
+    Install BBC BASIC for SDL 2.0 by unzipping the edition for your CPU into a
+    directory of its own and putting that directory's 'bbcsdl' on your PATH:
+
+    - Downloads: https://www.bbcbasic.co.uk/bbcsdl/index.html
+    - Linux (64-bit, x86):   https://www.bbcbasic.co.uk/bbcsdl/bbclinux.zip
+    - Linux (32-bit, x86):   https://www.bbcbasic.co.uk/bbcsdl/bbclinux32.zip
+    - Raspberry Pi (64-bit): https://www.bbcbasic.co.uk/bbcsdl/bbc-rpi64.zip
+    - Raspberry Pi (32-bit): https://www.bbcbasic.co.uk/bbcsdl/bbc-rpi.zip
+
+    The zip also needs SDL2 at runtime; see install64.txt inside it.
+  failed_version: "Failed to read the installed bbcsdl version"
+  failed_latest_version: "Failed to determine the latest BBC BASIC for SDL 2.0 version"
+  failed_binary: "Found 'bbcsdl' on PATH but could not resolve it to a BBC BASIC executable"
+  failed_install_dir: "Could not identify the BBC BASIC for SDL 2.0 installation directory"
+  unsupported_arch: "No BBC BASIC for SDL 2.0 download is published for this CPU architecture"
+  missing_unzip: "'unzip' is required to install the BBC BASIC for SDL 2.0 archive"
+  downloading: "Downloading BBC BASIC for SDL 2.0 {version}..."
+  extracting: "Extracting the BBC BASIC for SDL 2.0 archive..."
+  backing_up: "Backing up the current BBC BASIC for SDL 2.0 installation..."
+  installing: "Installing BBC BASIC for SDL 2.0 to {path}..."
+  update_success: "BBC BASIC for SDL 2.0 updated successfully to {version}"
+
+# Version discovery
+#
+# Current version
+# ---------------
+# bbcsdl is a windowed IDE with no --version flag: running it to ask opens a
+# window. The build stamps its own banner into the executable instead
+# ("BBC BASIC for Linux version 1.44a"), so the version is read straight out of
+# the file with `grep -a` — no binutils `strings` dependency, and nothing is
+# executed to find out.
+#
+# Latest version
+# --------------
+# Deliberately NOT GitHub. rtrussell/BBCSDL publishes no releases and no tags,
+# and include/version.h on master is the development head: it read 1.44b while
+# the published zip, the website and every installed copy were still on 1.44a.
+# Checking against master would therefore report an update on every run that
+# the download channel cannot deliver — the version source has to sit on the
+# same channel as update.download_*, which is the vendor site.
+#
+# The site's changelog table is that channel's announcement: its first column
+# holds one released version per row, either bare or wrapped in a link to the
+# release's forum post. Both shapes are matched, and the highest version wins
+# rather than the topmost row, so a reordered table cannot pick a stale entry.
+# Only whole-cell matches count — that is what keeps the download table's
+# "(21.6 Mbytes)" sizes out of the candidates.
+version:
+  # Matches the banner in the executable. Kept anchored on the literal prefix
+  # (no leading `.*`) so a greedy match cannot eat the leading version digit.
+  binary_regex: 'BBC BASIC for [A-Za-z0-9 ]{1,20}version [0-9]+\.[0-9]+[a-z]?'
+  binary_version_regex: '[0-9]+\.[0-9]+[a-z]?$'
+  source: "vendor_changelog"
+  changelog_url: "https://www.bbcbasic.co.uk/bbcsdl/index.html"
+  changelog_cell_regex: '<TD[^>]*>(<A[^>]*>)?[0-9]+\.[0-9]+[a-z]?(</A>)?</TD>'
+  # A released version is "N.NN" with an optional single-letter revision
+  # (1.44a, 1.43c). Anything that does not reduce to this shape is discarded.
+  version_regex: '^[0-9]+\.[0-9]+[a-z]?$'
+
+# Update configuration
+update:
+  method: "vendor_zip"
+  output_lines: 20
+  # Downloads, by `uname -m`. The vendor publishes x86 editions as "linux" and
+  # ARM editions as "rpi"; there is no generic ARM build.
+  assets:
+    x86_64: "https://www.bbcbasic.co.uk/bbcsdl/bbclinux.zip"
+    i686: "https://www.bbcbasic.co.uk/bbcsdl/bbclinux32.zip"
+    aarch64: "https://www.bbcbasic.co.uk/bbcsdl/bbc-rpi64.zip"
+    armv7l: "https://www.bbcbasic.co.uk/bbcsdl/bbc-rpi.zip"
+  # Where to install when bbcsdl is not already on PATH. A leading "~/" is
+  # expanded against $HOME.
+  default_install_dir: "~/.local/opt/bbcsdl"
+  # The archive unpacks flat — bbcsdl, bbcsdl.bbc, lib/, examples/ — with no
+  # wrapping directory, so these are what marks a directory as a BBC BASIC
+  # installation rather than a plain bin directory that merely holds the
+  # executable. The install directory is replaced wholesale, so misidentifying
+  # it would be destructive; a directory without a marker is refused.
+  install_dir_markers: "lib bbcsdl.bbc"
+  # Executables in the archive lose their mode through the zip on some
+  # toolchains; these are re-marked executable after extraction.
+  executables: "bbcsdl mkicon.sh"
+  # Each update moves the previous installation aside as
+  # <install_dir>.backup.<YYYYmmdd_HHMMSS>. The tree is ~45 MB unpacked, so
+  # unbounded backups add up: after a verified-successful update only this many
+  # of the newest are kept. 0 keeps none beyond the run in flight.
+  #
+  # Note that anything the user kept inside the installation directory — saved
+  # .bbc programs, edited libraries — stays in the backup rather than being
+  # carried into the new tree, which is why one spare generation is kept.
+  backup_retention: 2
+
+# Prompts
+prompts:
+  confirm_update:
+    message: "Update BBC BASIC for SDL 2.0?"
+    type: "yes_no"

@@ -1,0 +1,39 @@
+<!-- Fixture for get_latest_bbcsdl_version, modelled on
+     https://www.bbcbasic.co.uk/bbcsdl/index.html
+
+     Two things here are deliberate:
+
+     1. The download table carries sizes that LOOK like versions ("21.6",
+        "28.6"). They sit in cells with other text, so a whole-cell match
+        excludes them and a loose one does not.
+     2. The changelog rows are NOT in descending order, and the first row is
+        not the highest version. An implementation that took the topmost row
+        would answer 1.43c here; only one that takes the highest answers
+        1.44a. The disorder is asserted in the test so it cannot drift back. -->
+<HTML>
+<BODY>
+
+<TABLE>
+<TR><TD><A HREF="https://www.bbcbasic.co.uk/bbcsdl/bbclinux.zip"><BIG>Linux edition</BIG></A> (64-bit, x86 CPU) (21.6 Mbytes)</TD></TR>
+<TR><TD><A HREF="https://www.bbcbasic.co.uk/bbcsdl/bbclinux32.zip"><BIG>Linux edition</BIG></A> (32-bit, x86 CPU) (21.5 Mbytes)</TD></TR>
+<TR><TD><A HREF="https://www.bbcbasic.co.uk/bbcsdl/bbc-rpi64.zip"><BIG>Raspberry Pi OS edition</BIG></A> (64-bit) (28.6 Mbytes)</TD></TR>
+</TABLE>
+
+<TABLE ALIGN="center" WIDTH="100%" BORDER=1 CELLSPACING=0 CELLPADDING=4>
+<TR><TH>Version</TH><TH>Date</TH><TH>Modification summary</TH></TR>
+
+<TR><TD NOWRAP>1.43c</TD><TD NOWRAP>05-Feb-2026</TD>
+<TD>Out of order on purpose: this row is first but is not the newest release.</TD></TR>
+
+<TR><TD NOWRAP>1.44a</TD><TD NOWRAP>27-Mar-2026</TD>
+<TD>Added <b>*FX 20</b>; resizing the window <b>scales</b> output.</TD></TR>
+
+<TR><TD NOWRAP><A HREF="https://forums.raspberrypi.com/viewtopic.php?p=2350858#p2350858">1.43b</A></TD><TD NOWRAP>21-Nov-2025</TD>
+<TD>A linked row, the shape every older release uses.</TD></TR>
+
+<TR><TD NOWRAP><A HREF="https://www.stardot.org.uk/forums/viewtopic.php?t=12345">1.9a</A></TD><TD NOWRAP>14-Jun-2020</TD>
+<TD>Sorts above 1.44a byte-wise and below it by version.</TD></TR>
+
+</TABLE>
+</BODY>
+</HTML>
