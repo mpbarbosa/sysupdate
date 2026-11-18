@@ -141,6 +141,14 @@ const PACKAGE_MANAGER_SUMMARY_CONFIG: Record<
     typeLabel: 'package manager',
     description: 'Snap package update inventory discovered from the live sysupdate package check.',
   },
+  qwen_models: {
+    id: 'manager-qwen',
+    name: 'Qwen models (Ollama)',
+    snippetId: 'qwen',
+    category: 'apps',
+    typeLabel: 'model manager',
+    description: 'Ollama Qwen model digests compared against the registry by the live sysupdate check.',
+  },
   firmware_updates: {
     id: 'manager-firmware',
     name: 'Firmware updates',
