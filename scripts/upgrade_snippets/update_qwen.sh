@@ -14,7 +14,7 @@
 # that manifest is the registry's bytes verbatim, so hashing the registry's
 # manifest gives a comparable digest without pulling anything.
 #
-# Version: 0.2.0
+# Version: 0.3.0
 # Author: mpb
 # Repository: https://github.com/mpbarbosa/sysupdate
 # License: MIT
@@ -30,13 +30,29 @@ fi
 QWEN_WANTED_MODELS="${SYSUPDATE_QWEN_MODELS:-qwen3:4b}"
 QWEN_REGISTRY_URL="${SYSUPDATE_OLLAMA_REGISTRY_URL:-https://registry.ollama.ai}"
 
+# Path of the ollama binary, or empty. The user-local install
+# (~/.local/ollama/bin) is often not on PATH, so look there too;
+# SYSUPDATE_OLLAMA_BIN overrides both.
+resolve_ollama_bin() {
+    local candidate
+    for candidate in "${SYSUPDATE_OLLAMA_BIN:-}" "$(command -v ollama 2>/dev/null || true)" \
+                     "$HOME/.local/ollama/bin/ollama"; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+OLLAMA_BIN="$(resolve_ollama_bin || true)"
+
 # Every qwen model already on disk, one "name id" pair per line. Matches the
 # model's last path component, so namespaced (user/qwen3) and host-qualified
 # (hf.co/Qwen/...) references count too. Fails when `ollama list` does, so a
 # broken listing is not mistaken for "nothing installed".
 list_installed_qwen_models() {
     local listing
-    listing=$(ollama list 2>/dev/null) || return 1
+    listing=$("$OLLAMA_BIN" list 2>/dev/null) || return 1
     awk 'NR>1 { n = tolower($1); sub(/.*\//, "", n); if (n ~ /^qwen/) print $1, $2 }' <<< "$listing"
 }
 
@@ -69,7 +85,7 @@ fetch_qwen_remote_digest() {
 }
 
 update_qwen_models() {
-    if ! command -v ollama &> /dev/null; then
+    if [ -z "$OLLAMA_BIN" ]; then
         print_warning "🦙 Ollama not installed - skipping Qwen model updates"
         print_status "💡 Install Ollama from https://ollama.com/download"
         emit_summary_event "qwen_models" "package_manager" "ollama" "status" "not_installed" "total_updates" "0"
@@ -78,7 +94,8 @@ update_qwen_models() {
 
     print_operation_header "🔄 Checking Qwen models in Ollama..."
 
-    if ! ollama list &> /dev/null; then
+    print_status "Using $OLLAMA_BIN"
+    if ! "$OLLAMA_BIN" list &> /dev/null; then
         print_warning "Ollama is not running - skipping Qwen model updates"
         print_status "Start it with 'ollama serve' or 'systemctl start ollama'"
         emit_summary_event "qwen_models" "package_manager" "ollama" "status" "unknown" "total_updates" "0"
@@ -138,7 +155,7 @@ update_qwen_models() {
     local failed=0
     for model in "${models[@]}"; do
         print_status "==> ollama pull $model"
-        if ! ollama pull "$model"; then
+        if ! "$OLLAMA_BIN" pull "$model"; then
             print_error "Failed to pull $model"
             failed=$((failed + 1))
         fi
