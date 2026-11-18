@@ -60,7 +60,7 @@ list_installed_qwen_models() {
 # qwen3:4b -> /v2/library/qwen3/manifests/4b ; a bare name means tag latest;
 # a namespaced name (user/model) keeps its namespace.
 fetch_qwen_remote_digest() {
-    local ref="$1" name tag repo manifest digest
+    local ref="$1" name tag repo body digest
     name="${ref%%:*}"
     tag="latest"
     [ "$name" != "$ref" ] && tag="${ref#*:}"
@@ -71,15 +71,30 @@ fetch_qwen_remote_digest() {
         *)     repo="library/$name" ;;
     esac
 
-    # Fetch first and check curl's own status: hashing a truncated body would
-    # report a false update instead of an unknown result.
-    manifest=$(curl -fsSL --max-time 20 \
-        -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-        "$QWEN_REGISTRY_URL/v2/$repo/manifests/$tag" 2>/dev/null) || return 1
-    [ -n "$manifest" ] || return 1
+    # Written to a file and hashed as received. A command substitution would
+    # strip trailing newlines, and the digest has to be of the registry's exact
+    # bytes to be comparable with the one `ollama list` stored -- a stripped
+    # copy hashes differently, so it would differ from every stored digest and
+    # report an update for every model.
+    body="$(mktemp "${TMPDIR:-/tmp}/sysupdate-qwen-manifest.XXXXXX")" || return 1
 
-    # $(...) strips trailing newlines; the registry's manifest has none.
-    digest=$(printf '%s' "$manifest" | sha256sum | cut -c1-12)
+    # curl's own status first: hashing a truncated body would report a false
+    # update instead of an unknown result.
+    if ! curl -fsSL --max-time 20 \
+        -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+        -o "$body" "$QWEN_REGISTRY_URL/v2/$repo/manifests/$tag" 2>/dev/null; then
+        rm -f "$body"
+        return 1
+    fi
+    # curl can exit 0 having written nothing, and the sha256 of an empty file
+    # is a perfectly well-formed digest.
+    if [ ! -s "$body" ]; then
+        rm -f "$body"
+        return 1
+    fi
+
+    digest=$(sha256sum < "$body" | cut -c1-12)
+    rm -f "$body"
     [[ "$digest" =~ ^[0-9a-f]{12}$ ]] || return 1
     echo "$digest"
 }
