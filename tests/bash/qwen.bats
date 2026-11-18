@@ -29,13 +29,37 @@ setup() {
     export BATS_TEST_TMPDIR
     STUB_BIN="$BATS_TEST_TMPDIR/bin"
     mkdir -p "$STUB_BIN"
-    PATH="$STUB_BIN:$PATH"
     # Nothing is found unless a test arranges it, so a stray ollama on the
-    # developer's machine cannot reach these tests.
+    # developer's machine cannot reach these tests: the override is blanked,
+    # $HOME is repointed away from the user-local install, and any directory
+    # holding an ollama is dropped from PATH. Without that last part
+    # `command -v ollama` would find the real binary, and the tests that assert
+    # "no Ollama" would pass only on a machine that happens not to have it.
+    PATH="$STUB_BIN:$(path_without_ollama)"
     SYSUPDATE_OLLAMA_BIN=""
     HOME="$BATS_TEST_TMPDIR/home"
     mkdir -p "$HOME"
     SYSUPDATE_OLLAMA_REGISTRY_URL="https://registry.example.invalid"
+    # Inherited values of these three change what the snippet does: a non-empty
+    # BLUE makes it skip sourcing core_lib.sh (so print_* and the event helpers
+    # would be undefined), SYSUPDATE_QWEN_MODELS adds models no test listing
+    # covers and shifts the pending count, and SYSUPDATE_JSON_EVENTS would put
+    # event lines into the output of every test that is not about events.
+    unset BLUE SYSUPDATE_QWEN_MODELS SYSUPDATE_JSON_EVENTS
+}
+
+# $PATH with every directory that holds an executable `ollama` removed.
+path_without_ollama() {
+    local dir kept=""
+    local IFS=:
+    for dir in $PATH; do
+        [ -n "$dir" ] || continue
+        if [ -x "$dir/ollama" ]; then
+            continue
+        fi
+        kept="${kept:+$kept:}$dir"
+    done
+    printf '%s' "$kept"
 }
 
 # Load the snippet's functions without its trailing entry call, keeping its own
@@ -102,16 +126,27 @@ stub_curl() {
     echo "${2:-0}" > "$BATS_TEST_TMPDIR/curl_rc"
     cat > "$STUB_BIN/curl" <<'STUB'
 #!/bin/bash
+out=""
+prev=""
 for arg in "$@"; do
+    [ "$prev" = "-o" ] && out="$arg"
     case "$arg" in
         http*) echo "$arg" >> "$BATS_TEST_TMPDIR/curl_urls.log" ;;
     esac
+    prev="$arg"
 done
 rc=$(cat "$BATS_TEST_TMPDIR/curl_rc" 2>/dev/null || echo 0)
 # A transfer that fails part-way has already written what it received, so the
 # body is NOT empty on failure. That is what makes checking curl's exit status
 # load-bearing rather than redundant with the empty-body check.
-cat "$BATS_TEST_TMPDIR/manifest.json"
+#
+# Both destinations are served, so a snippet that stopped passing -o would hash
+# an empty file rather than quietly keep passing.
+if [ -n "$out" ]; then
+    cat "$BATS_TEST_TMPDIR/manifest.json" > "$out"
+else
+    cat "$BATS_TEST_TMPDIR/manifest.json"
+fi
 exit "$rc"
 STUB
     chmod +x "$STUB_BIN/curl"
@@ -290,6 +325,24 @@ notqwen:7b	111111111111	4.1 GB	1 day ago"
     [ "$status" -eq 0 ]
     [ "$output" = "$(digest_of "$body")" ]
     [[ "$output" =~ ^[0-9a-f]{12}$ ]]
+}
+
+@test "fetch_qwen_remote_digest: a body ending in a newline hashes those bytes, not a stripped copy" {
+    stub_ollama
+    # `ollama list` stores the sha256 of the manifest as the registry served
+    # it, so the comparison is only valid if the snippet hashes those exact
+    # bytes. Capturing the body in a shell variable would drop trailing
+    # newlines, and the digest of the stripped copy differs from every stored
+    # one -- an update reported for every model, on every run, from a byte
+    # nobody can see. The live registry happens to send no trailing newline
+    # today, which is why this is asserted rather than assumed.
+    local body=$'{"schemaVersion":2,"layers":[{"size":123}]}\n'
+    stub_curl "$body"
+    source_qwen_functions
+    run fetch_qwen_remote_digest "qwen3:4b"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(digest_of "$body")" ]
+    [ "$output" != "$(digest_of "${body%$'\n'}")" ]
 }
 
 # ---------------------------------------------------------------------------
